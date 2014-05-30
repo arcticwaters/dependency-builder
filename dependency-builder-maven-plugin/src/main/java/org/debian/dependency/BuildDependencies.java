@@ -1,4 +1,4 @@
-package com.example;
+package org.debian.dependency;
 
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
