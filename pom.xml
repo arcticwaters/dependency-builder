@@ -8,6 +8,37 @@
 	<version>0.0.1-SNAPSHOT</version>
 	<packaging>pom</packaging>
 
+	<name>Dependency Builder</name>
+	<description>Tools for building Java project dependencies based on their Maven metadata.</description>
+	<inceptionYear>2014</inceptionYear>
+
+	<scm>
+		<url>https://github.com/arcticwaters/dependency-builder</url>
+		<connection>scm:git:git://github.com/arcticwaters/dependency-builder.git</connection>
+		<developerConnection>scm:git:git@github.com:arcitcwaters/dependency-builder.git</developerConnection>
+		<tag>HEAD</tag>
+	</scm>
+
+	<licenses>
+		<license>
+			<name>Apache License 2.0</name>
+			<url>http://www.spdx.org/licenses/Apache-2.0</url>
+		</license>
+	</licenses>
+
+	<issueManagement>
+		<system>GitHub Issues</system>
+		<url>https://github.com/arcticwaters/dependency-builder/issues</url>
+	</issueManagement>
+
+	<developers>
+		<developer>
+			<name>Andrew Schurman</name>
+			<email>arcticwaters@gmail.com</email>
+		</developer>
+	</developers>
+
+
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 	</properties>
@@ -50,6 +81,7 @@
 				<version>2.12.1</version>
 				<configuration>
 					<configLocation>config/checkstyle.xml</configLocation>
+					<headerLocation>config/copyright-header.txt</headerLocation>
 					<violationSeverity>info</violationSeverity>
 				</configuration>
 				<executions>
