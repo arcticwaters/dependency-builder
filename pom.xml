@@ -84,13 +84,6 @@
 					<headerLocation>config/copyright-header.txt</headerLocation>
 					<violationSeverity>info</violationSeverity>
 				</configuration>
-				<executions>
-					<execution>
-						<goals>
-							<goal>check</goal>
-						</goals>
-					</execution>
-				</executions>
 				<dependencies>
 					<dependency>
 						<groupId>org.debian.dependency</groupId>
@@ -108,13 +101,6 @@
 						<ruleset>config/pmd.xml</ruleset>
 					</rulesets>
 				</configuration>
-				<executions>
-					<execution>
-						<goals>
-							<goal>check</goal>
-						</goals>
-					</execution>
-				</executions>
 				<dependencies>
 					<dependency>
 						<groupId>org.debian.dependency</groupId>
