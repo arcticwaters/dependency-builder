@@ -3,11 +3,11 @@
 	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 
-	<groupId>com.example</groupId>
-	<artifactId>simple</artifactId>
-	<version>0.0.1</version>
+	<parent>
+		<groupId>com.example</groupId>
+		<artifactId>test-parent</artifactId>
+		<version>0.0.1-SNAPSHOT</version>
+	</parent>
 
-	<scm>
-		<connection>scm:local|@basedir@/src/it/setup/simple|.</connection>
-	</scm>
+	<artifactId>module1</artifactId>
 </project>

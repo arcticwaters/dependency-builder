@@ -16,20 +16,29 @@
 package org.debian.dependency.builders;
 
 import java.io.File;
+import java.io.IOException;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.Scm;
 import org.apache.maven.plugin.BuildPluginManager;
-import org.apache.maven.plugin.MojoExecution;
 import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.project.DefaultProjectBuildingRequest;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectBuilder;
 import org.apache.maven.project.ProjectBuildingException;
+import org.apache.maven.project.ProjectBuildingRequest;
 import org.apache.maven.project.ProjectBuildingResult;
+import org.apache.maven.shared.dependency.graph.DependencyNode;
+import org.apache.maven.shared.dependency.graph.traversal.DependencyNodeVisitor;
 import org.codehaus.plexus.component.annotations.Component;
 import org.codehaus.plexus.component.annotations.Configuration;
 import org.codehaus.plexus.component.annotations.Requirement;
+import org.codehaus.plexus.logging.AbstractLogEnabled;
 import org.twdata.maven.mojoexecutor.MojoExecutor;
 
 /**
@@ -38,7 +47,7 @@ import org.twdata.maven.mojoexecutor.MojoExecutor;
  * accessible.
  */
 @Component(role = BuildStrategy.class, hint = "scm")
-public class SCMBuildStrategy implements BuildStrategy {
+public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrategy {
 	@Configuration(value = "org.apache.maven.plugins")
 	private String scmPluginGroupId;
 	@Configuration(value = "maven-scm-plugin")
@@ -60,37 +69,46 @@ public class SCMBuildStrategy implements BuildStrategy {
 	private ProjectBuilder projectBuilder;
 	@Requirement
 	private BuildPluginManager buildPluginManager;
+	@Requirement(hint = "maven2")
+	private SourceBuilder builder;
 
 	@Override
-	public File buildArtifact(final Artifact artifact, final MavenSession mavenSession, final MojoExecution mojoExecution)
-			throws ArtifactBuildException {
-		MavenProject resolvedProject;
+	public Set<Artifact> build(final DependencyNode root, final BuildSession session) throws ArtifactBuildException {
+		MavenProject project = constructProject(root.getArtifact(), session);
+		Scm scm = project.getScm();
+		if (scm == null) {
+			return Collections.emptySet();
+		}
 
+		final File artifactDir = new File(session.getWorkDirectory(), root.getArtifact().toString());
+		artifactDir.mkdirs();
+
+		checkoutSource(project, artifactDir, session);
+		final Set<Artifact> built = new HashSet<Artifact>();
+
+		DependencyCollectingVisitor visitor = new DependencyCollectingVisitor();
+		for (DependencyNode node : root.getChildren()) {
+			node.accept(visitor);
+		}
 		try {
-			ProjectBuildingResult request = projectBuilder.build(artifact, mavenSession.getProjectBuildingRequest());
-			resolvedProject = request.getProject();
-		} catch (ProjectBuildingException e) {
+			for (Artifact artifact : visitor.artifacts) {
+				if (builder.canBuild(artifact, artifactDir)) {
+					built.addAll(builder.build(artifact, artifactDir, session.getTargetRepository()));
+				}
+			}
+		} catch (IOException e) {
 			throw new ArtifactBuildException(e);
 		}
 
-		Scm scm = resolvedProject.getScm();
-		if (scm == null) {
-			throw new ArtifactBuildException("No scm information for " + artifact);
-		}
-
-		File buildDirectory = new File(mavenSession.getCurrentProject().getBuild().getDirectory());
-		File checkoutBasedir = new File(new File(buildDirectory, "dependency-builder"), "checkout");
-		File artifactDir = new File(checkoutBasedir, artifact.toString());
-		artifactDir.mkdirs();
-
-		checkoutSource(mavenSession, mojoExecution, resolvedProject, artifactDir);
-
-		return null;
+		// we got scm info from the root not, do not gate
+		built.addAll(builder.build(root.getArtifact(), artifactDir, session.getTargetRepository()));
+		return built;
 	}
 
 	@SuppressWarnings("PMD.PreserveStackTrace")
-	private void checkoutSource(final MavenSession mavenSession, final MojoExecution mojoExecution, final MavenProject resolvedProject,
-			final File artifactDir) throws ArtifactBuildException {
+	private void checkoutSource(final MavenProject resolvedProject, final File artifactDir, final BuildSession buildSession)
+			throws ArtifactBuildException {
+		MavenSession mavenSession = buildSession.getMavenSession();
 		MavenProject currentProject = mavenSession.getCurrentProject();
 		try {
 			// we override the current project so that maven-scm-plugin can read properties directly from that project
@@ -99,8 +117,7 @@ public class SCMBuildStrategy implements BuildStrategy {
 			try {
 				// first try the developerConnection
 				MojoExecutor.executeMojo(
-						MojoExecutor.plugin(scmPluginGroupId, scmPluginArtifactId, scmPluginVersion, mojoExecution.getPlugin()
-								.getDependencies()),
+						MojoExecutor.plugin(scmPluginGroupId, scmPluginArtifactId, scmPluginVersion, buildSession.getExtensions()),
 						scmPluginGoalCheckout,
 						MojoExecutor.configuration(
 								MojoExecutor.element(scmPluginPropCheckoutDir, artifactDir.toString()),
@@ -112,8 +129,7 @@ public class SCMBuildStrategy implements BuildStrategy {
 				try {
 					// now the regular connection
 					MojoExecutor.executeMojo(
-							MojoExecutor.plugin(scmPluginGroupId, scmPluginArtifactId, scmPluginVersion, mojoExecution.getPlugin()
-									.getDependencies()),
+							MojoExecutor.plugin(scmPluginGroupId, scmPluginArtifactId, scmPluginVersion, buildSession.getExtensions()),
 							scmPluginGoalCheckout,
 							MojoExecutor.configuration(
 									MojoExecutor.element(scmPluginPropCheckoutDir, artifactDir.toString()),
@@ -127,6 +143,36 @@ public class SCMBuildStrategy implements BuildStrategy {
 			}
 		} finally {
 			mavenSession.setCurrentProject(currentProject);
+		}
+	}
+
+	private MavenProject constructProject(final Artifact artifact, final BuildSession session) throws ArtifactBuildException {
+		try {
+			ProjectBuildingRequest request = new DefaultProjectBuildingRequest(session.getMavenSession().getProjectBuildingRequest());
+			request.setActiveProfileIds(null);
+			request.setInactiveProfileIds(null);
+			request.setUserProperties(null);
+
+			ProjectBuildingResult result = projectBuilder.build(artifact, request);
+			return result.getProject();
+		} catch (ProjectBuildingException e) {
+			throw new ArtifactBuildException(e);
+		}
+	}
+
+	/** Collects unique dependencies from a graph in a bottom up fashion, i.e. those without dependencies first. */
+	private static class DependencyCollectingVisitor implements DependencyNodeVisitor {
+		private final Set<Artifact> artifacts = new LinkedHashSet<Artifact>();
+
+		@Override
+		public boolean visit(final DependencyNode node) {
+			return true;
+		}
+
+		@Override
+		public boolean endVisit(final DependencyNode node) {
+			artifacts.add(node.getArtifact());
+			return true;
 		}
 	}
 }

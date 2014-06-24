@@ -4,10 +4,12 @@
 	<modelVersion>4.0.0</modelVersion>
 
 	<groupId>com.example</groupId>
-	<artifactId>simple</artifactId>
-	<version>0.0.1</version>
+	<artifactId>test-parent</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<packaging>pom</packaging>
 
-	<scm>
-		<connection>scm:local|@basedir@/src/it/setup/simple|.</connection>
-	</scm>
+	<modules>
+		<module>module1</module>
+		<module>module2</module>
+	</modules>
 </project>

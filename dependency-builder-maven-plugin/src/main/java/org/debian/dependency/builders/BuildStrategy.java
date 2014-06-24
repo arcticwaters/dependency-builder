@@ -15,22 +15,22 @@
  */
 package org.debian.dependency.builders;
 
-import java.io.File;
+import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.MojoExecution;
+import org.apache.maven.shared.dependency.graph.DependencyNode;
 
 /** Represents a means for building an artifact. */
 public interface BuildStrategy {
 	/**
-	 * Attempts to build the given {@link Artifact}.
+	 * Attempts to build artifacts in the {@link DependencyNode} graph. The root artifact <em>needs</em> to be built. Some
+	 * strategies may be able to build more than a single artifact, i.e., a multi-module project, although it is not expected to
+	 * built the entire graph.
 	 *
-	 * @param artifact artifact to build
-	 * @param mavenSession current session to build in
-	 * @param mojoExecution execution used call this strategy to pass configuration
-	 * @throws ArtifactBuildException if we cannot build the artifact
-	 * @return location of the built artifact
+	 * @param graph dependency graph
+	 * @param session session to use
+	 * @return artifacts that were built
+	 * @throws ArtifactBuildException in case of errors
 	 */
-	File buildArtifact(Artifact artifact, MavenSession mavenSession, MojoExecution mojoExecution) throws ArtifactBuildException;
+	Set<Artifact> build(DependencyNode graph, BuildSession session) throws ArtifactBuildException;
 }
