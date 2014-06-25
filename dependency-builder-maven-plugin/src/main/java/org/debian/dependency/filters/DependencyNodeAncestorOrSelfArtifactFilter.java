@@ -22,8 +22,7 @@ import org.apache.maven.shared.dependency.graph.filter.DependencyNodeFilter;
  * A {@link DependencyNodeFilter} which accepts what a nested filter accepts on a given node or any of its ancestors.
  */
 public class DependencyNodeAncestorOrSelfArtifactFilter implements DependencyNodeFilter {
-
-	private DependencyNodeFilter filter;
+	private final DependencyNodeFilter filter;
 
 	/**
 	 * Creates a new {@link DependencyNodeAncestorOrSelfArtifactFilter}.

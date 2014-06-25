@@ -84,6 +84,26 @@
 					<headerLocation>config/copyright-header.txt</headerLocation>
 					<violationSeverity>info</violationSeverity>
 				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>check</goal>
+						</goals>
+					</execution>
+					<execution>
+						<id>tests</id>
+						<goals>
+							<goal>check</goal>
+						</goals>
+						<configuration>
+							<configLocation>config/checkstyle-tests.xml</configLocation>
+							<sourceDirectory>${project.build.testSourceDirectory}</sourceDirectory>
+							<includeResources>false</includeResources>
+							<includeTestResources>true</includeTestResources>
+							<outputFile>${project.build.directory}/checkstyle-test-result.xml</outputFile>
+						</configuration>
+					</execution>
+				</executions>
 				<dependencies>
 					<dependency>
 						<groupId>org.debian.dependency</groupId>
@@ -101,6 +121,13 @@
 						<ruleset>config/pmd.xml</ruleset>
 					</rulesets>
 				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>check</goal>
+						</goals>
+					</execution>
+				</executions>
 				<dependencies>
 					<dependency>
 						<groupId>org.debian.dependency</groupId>

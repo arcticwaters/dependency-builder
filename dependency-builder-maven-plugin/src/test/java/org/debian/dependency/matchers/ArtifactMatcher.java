@@ -22,7 +22,7 @@ import org.hamcrest.TypeSafeMatcher;
 
 /** Matches an {@link Artifact}. */
 public class ArtifactMatcher extends TypeSafeMatcher<Artifact> {
-	private Artifact ref;
+	private final Artifact ref;
 
 	/**
 	 * Creates a new matcher.

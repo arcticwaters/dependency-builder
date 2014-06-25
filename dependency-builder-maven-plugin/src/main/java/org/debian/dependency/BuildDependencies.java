@@ -156,6 +156,7 @@ public class BuildDependencies extends AbstractMojo {
 		return collector.getDependencyTree();
 	}
 
+	@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 	private List<DependencyNode> collectArtifactRootsToInstall(final DependencyNode root) throws MojoExecutionException {
 		CollectingDependencyNodeVisitor collector = new CollectingDependencyNodeVisitor();
 		DependencyNodeVisitor filter = new FilteringDependencyNodeVisitor(collector, new ArtifactDependencyNodeFilter(ignoreArtifacts));

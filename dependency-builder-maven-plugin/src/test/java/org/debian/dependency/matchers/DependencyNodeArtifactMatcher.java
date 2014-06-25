@@ -21,7 +21,7 @@ import org.hamcrest.TypeSafeMatcher;
 
 /** Matches a {@link DependencyNode} graph via its artifacts. */
 public class DependencyNodeArtifactMatcher extends TypeSafeMatcher<DependencyNode> {
-	private DependencyNode ref;
+	private final DependencyNode ref;
 
 	/**
 	 * Creates a new matcher.

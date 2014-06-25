@@ -68,6 +68,7 @@ import org.junit.Test;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
+/** Test case for {@link BuildDependencies}. */
 public class TestBuildDependencies {
 	@Rule
 	public MojoRule mojoRule = new MojoRule();
@@ -89,7 +90,7 @@ public class TestBuildDependencies {
 		return config;
 	}
 
-	private void merge(PlexusConfiguration from, PlexusConfiguration to) {
+	private void merge(final PlexusConfiguration from, final PlexusConfiguration to) {
 		PlexusConfiguration[] children = from.getChildren();
 		if (children == null) {
 			return;
@@ -101,7 +102,7 @@ public class TestBuildDependencies {
 		}
 	}
 
-	private BuildDependencies lookupConfiguredMojo(PlexusConfiguration config) throws Exception {
+	private BuildDependencies lookupConfiguredMojo(final PlexusConfiguration config) throws Exception {
 		merge(defaultConfiguration(), config);
 
 		MavenProject project = new MavenProject();
@@ -140,7 +141,7 @@ public class TestBuildDependencies {
 		when(repositorySystem.createProjectArtifact(anyString(), anyString(), anyString()))
 				.then(new Answer<Artifact>() {
 					@Override
-					public Artifact answer(InvocationOnMock invocation) throws Throwable {
+					public Artifact answer(final InvocationOnMock invocation) throws Throwable {
 						Object[] args = invocation.getArguments();
 						Artifact result = new ArtifactStub();
 						result.setGroupId((String) args[0]);
@@ -152,7 +153,7 @@ public class TestBuildDependencies {
 		when(repositorySystem.resolve(any(ArtifactResolutionRequest.class)))
 				.then(new Answer<ArtifactResolutionResult>() {
 					@Override
-					public ArtifactResolutionResult answer(InvocationOnMock invocation) throws Throwable {
+					public ArtifactResolutionResult answer(final InvocationOnMock invocation) throws Throwable {
 						ArtifactResolutionRequest request = (ArtifactResolutionRequest) invocation.getArguments()[0];
 						ArtifactResolutionResult result = new ArtifactResolutionResult();
 						result.setArtifacts(Collections.singleton(request.getArtifact()));
@@ -414,13 +415,13 @@ public class TestBuildDependencies {
 		final Set<Artifact> results = new HashSet<Artifact>();
 		node.accept(new DependencyNodeVisitor() {
 			@Override
-			public boolean visit(DependencyNode node) {
+			public boolean visit(final DependencyNode node) {
 				results.add(node.getArtifact());
 				return true;
 			}
 
 			@Override
-			public boolean endVisit(DependencyNode node) {
+			public boolean endVisit(final DependencyNode node) {
 				return true;
 			}
 		});

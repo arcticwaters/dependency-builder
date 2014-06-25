@@ -104,6 +104,9 @@ public class StrictPatternArtifactFilter implements ArtifactFilter {
 		setIncludes(includes, true);
 	}
 
+	/**
+	 * @return patterns which are included
+	 */
 	public List<String> getIncludes() {
 		return includes;
 	}
@@ -123,6 +126,9 @@ public class StrictPatternArtifactFilter implements ArtifactFilter {
 		excludeFilter = new StrictPatternIncludesArtifactFilter(list);
 	}
 
+	/**
+	 * @return patterns which are excluded
+	 */
 	public List<String> getExcludes() {
 		return excludes;
 	}

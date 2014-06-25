@@ -27,7 +27,7 @@ import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
  * An {@link ArtifactFilter} which matches precisely the input artifacts.
  */
 public class IdentityArtifactFilter implements ArtifactFilter {
-	private Set<Artifact> artifacts;
+	private final Set<Artifact> artifacts;
 
 	/**
 	 * Creates a new filter with no artifacts.
@@ -45,6 +45,9 @@ public class IdentityArtifactFilter implements ArtifactFilter {
 		this.artifacts = new HashSet<Artifact>(artifacts);
 	}
 
+	/**
+	 * @return artifacts which match this filter
+	 */
 	public Set<Artifact> getArtifacts() {
 		return Collections.unmodifiableSet(artifacts);
 	}

@@ -16,10 +16,8 @@
 package org.debian.dependency.builders;
 
 import java.io.File;
-import java.util.Collections;
 import java.util.List;
 
-import org.apache.maven.artifact.Artifact;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.Dependency;
 
@@ -27,13 +25,15 @@ import org.apache.maven.model.Dependency;
  * Tracks projects that need to be built.
  */
 public class BuildSession {
-	private MavenSession session;
+	private final MavenSession session;
 	private List<Dependency> extensions;
 	private File workDirectory;
 	private File targetRepository;
 
 	/**
 	 * Creates a new session.
+	 *
+	 * @param session current session
 	 */
 	public BuildSession(final MavenSession session) {
 		this.session = session;
@@ -70,7 +70,7 @@ public class BuildSession {
 	public void setWorkDirectory(final File workDirectory) {
 		this.workDirectory = workDirectory;
 	}
-	
+
 	/**
 	 * @return current maven session
 	 */
@@ -84,10 +84,10 @@ public class BuildSession {
 	public File getTargetRepository() {
 		return targetRepository;
 	}
-	
+
 	/**
 	 * Sets where to reference existing Maven artifacts.
-	 * 
+	 *
 	 * @param targetRepository existing Maven artifacts
 	 */
 	public void setTargetRepository(final File targetRepository) {

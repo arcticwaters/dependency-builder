@@ -24,9 +24,13 @@ import org.codehaus.plexus.util.reflection.ReflectorException;
 import org.hamcrest.Description;
 import org.hamcrest.TypeSafeMatcher;
 
-/** Reflectively matches properties on a particular object. */
+/**
+ * Reflectively matches properties on a particular object.
+ *
+ * @param <T> type of object to match
+ */
 public class ObjectPropertyMatcher<T> extends TypeSafeMatcher<T> {
-	private Map<String, Object> properties;
+	private final Map<String, Object> properties;
 
 	public ObjectPropertyMatcher(final Map<String, Object> properties) {
 		this.properties = properties;
@@ -37,7 +41,7 @@ public class ObjectPropertyMatcher<T> extends TypeSafeMatcher<T> {
 	}
 
 	@Override
-	public void describeTo(Description description) {
+	public void describeTo(final Description description) {
 		description.appendText("invocation result with properties: ");
 		for (Entry<String, Object> entry : properties.entrySet()) {
 			description.appendText(entry.getKey());
@@ -48,7 +52,7 @@ public class ObjectPropertyMatcher<T> extends TypeSafeMatcher<T> {
 	}
 
 	@Override
-	protected boolean matchesSafely(T item) {
+	protected boolean matchesSafely(final T item) {
 		Reflector reflector = new Reflector();
 		for (Entry<String, Object> entry : properties.entrySet()) {
 			try {

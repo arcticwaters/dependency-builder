@@ -26,9 +26,10 @@ import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.DefaultArtifact;
 import org.junit.Test;
 
+/** Basic tests for {@link StrictPatternArtifactFilter}. */
 public class TestStrictPatternArtifactFilter {
 	private StrictPatternArtifactFilter matcher = new StrictPatternArtifactFilter();
-	private Artifact artifact = new DefaultArtifact("com.example", "some-artifact-plugin", "", "", "", "", null);
+	private final Artifact artifact = new DefaultArtifact("com.example", "some-artifact-plugin", "", "", "", "", null);
 
 	@Test
 	public void testNoArtifacts() {

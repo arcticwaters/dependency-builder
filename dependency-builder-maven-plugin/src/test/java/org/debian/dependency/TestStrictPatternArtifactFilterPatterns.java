@@ -26,10 +26,11 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
 
+/** Tests pattern matching of {@link StrictPatternArtifactFilter}. */
 @RunWith(Parameterized.class)
 public class TestStrictPatternArtifactFilterPatterns {
-	private StrictPatternArtifactFilter matcher = new StrictPatternArtifactFilter();
-	private Artifact artifact = new DefaultArtifact("com.example", "some-artifact-plugin", "", "", "", "", null);
+	private final StrictPatternArtifactFilter matcher = new StrictPatternArtifactFilter();
+	private final Artifact artifact = new DefaultArtifact("com.example", "some-artifact-plugin", "", "", "", "", null);
 
 	@Parameters(name = "{4}")
 	public static Iterable<Object[]> parameters() {
@@ -47,10 +48,10 @@ public class TestStrictPatternArtifactFilterPatterns {
 		});
 	}
 
-	private String includePattern;
-	private String excludePattern;
-	private boolean includeShouldMatch;
-	private boolean excludeShouldMatch;
+	private final String includePattern;
+	private final String excludePattern;
+	private final boolean includeShouldMatch;
+	private final boolean excludeShouldMatch;
 
 	public TestStrictPatternArtifactFilterPatterns(final String includePattern, final String excludePattern,
 			final boolean includeShouldMatch, final boolean excludeShouldMatch, final String name) {

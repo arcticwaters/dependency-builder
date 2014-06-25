@@ -22,7 +22,7 @@ import org.apache.maven.shared.dependency.graph.filter.DependencyNodeFilter;
  * Inverts the logic of a given filter.
  */
 public class InversionDependencyNodeFilter implements DependencyNodeFilter {
-	private DependencyNodeFilter filter;
+	private final DependencyNodeFilter filter;
 
 	/**
 	 * Creates a new inversion filter.

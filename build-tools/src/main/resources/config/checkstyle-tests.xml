@@ -2,7 +2,7 @@
 <!DOCTYPE module PUBLIC "-//Puppy Crawl//DTD Check Configuration 1.2//EN" "http://www.puppycrawl.com/dtds/configuration_1_2.dtd">
 <module name="Checker">
 	<property name="severity" value="warning"/>
-	
+
 	<!-- Checks that property files contain the same keys.         -->
 	<!-- See http://checkstyle.sf.net/config_misc.html#Translation -->
 	<module name="Translation"/>
@@ -25,7 +25,7 @@
 		<property name="maximum" value="0"/>
 		<property name="message" value="Line has trailing spaces."/>
 	</module>
-	
+
 	<!-- Checks for Headers                                -->
 	<!-- See http://checkstyle.sf.net/config_header.html   -->
 	<!-- Following interprets the header file as regular expressions. -->
@@ -42,16 +42,7 @@
 
 		<!-- Checks for Javadoc comments.                     -->
 		<!-- See http://checkstyle.sf.net/config_javadoc.html -->
-		<module name="JavadocMethod">
-			<property name="scope" value="protected"/>
-			<property name="logLoadErrors" value="true"/>
-			<property name="suppressLoadErrors" value="true"/>
-			<property name="allowMissingPropertyJavadoc" value="true"/>
-		</module>
 		<module name="JavadocType"/>
-		<module name="JavadocVariable">
-			<property name="scope" value="protected"/>
-		</module>
 		<module name="JavadocStyle"/>
 
 
@@ -138,7 +129,6 @@
 		<module name="FinalClass"/>
 		<module name="HideUtilityClassConstructor"/>
 		<module name="InterfaceIsType"/>
-		<module name="VisibilityModifier"/>
 
 
 		<!-- Miscellaneous other checks.                   -->

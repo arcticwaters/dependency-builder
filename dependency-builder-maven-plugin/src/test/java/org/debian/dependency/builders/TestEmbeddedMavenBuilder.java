@@ -43,6 +43,7 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 
+/** Tests for {@link EmbeddedMavenBuilder}. */
 public class TestEmbeddedMavenBuilder {
 	@Rule
 	public MojoRule mojoRule = new MojoRule();

@@ -31,7 +31,6 @@ import org.apache.maven.model.building.ModelBuilder;
 import org.apache.maven.model.building.ModelBuildingException;
 import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.model.building.ModelBuildingResult;
-import org.apache.maven.repository.RepositorySystem;
 import org.apache.maven.shared.invoker.DefaultInvocationRequest;
 import org.apache.maven.shared.invoker.InvocationRequest;
 import org.apache.maven.shared.invoker.InvocationResult;
@@ -55,8 +54,6 @@ public class EmbeddedMavenBuilder extends AbstractLogEnabled implements SourceBu
 	private ModelBuilder modelBuilder;
 	@Requirement
 	private Invoker invoker;
-	@Requirement
-	private RepositorySystem repositorySystem;
 
 	@Override
 	public Set<Artifact> build(final Artifact artifact, final File basedir, final File localRepository) throws ArtifactBuildException {
@@ -71,16 +68,18 @@ public class EmbeddedMavenBuilder extends AbstractLogEnabled implements SourceBu
 
 		try {
 			InvocationResult result = invoker.execute(request);
+			if (result.getExitCode() == 0 && result.getExecutionException() == null) {
+				return Collections.singleton(artifact);
+			}
+
 			if (result.getExecutionException() != null) {
 				throw new ArtifactBuildException("Unable to build proejct", result.getExecutionException());
-			} else if (result.getExitCode() != 0) {
-				throw new ArtifactBuildException("Execution did not complete successfully");
 			}
+
+			throw new ArtifactBuildException("Execution did not complete successfully");
 		} catch (MavenInvocationException e) {
 			throw new ArtifactBuildException("Unable to build project", e);
 		}
-
-		return Collections.singleton(artifact);
 	}
 
 	private File findReactor(final Artifact artifact, final File basedir) throws ArtifactBuildException {
