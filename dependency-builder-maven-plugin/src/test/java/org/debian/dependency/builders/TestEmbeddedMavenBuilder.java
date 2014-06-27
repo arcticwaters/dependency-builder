@@ -19,6 +19,8 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.argThat;
+import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -31,6 +33,8 @@ import java.util.Map;
 import java.util.Map.Entry;
 
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.installer.ArtifactInstaller;
+import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.plugin.testing.MojoRule;
 import org.apache.maven.plugin.testing.stubs.ArtifactStub;
 import org.apache.maven.shared.invoker.InvocationRequest;
@@ -49,6 +53,7 @@ public class TestEmbeddedMavenBuilder {
 	public MojoRule mojoRule = new MojoRule();
 
 	private Invoker invoker;
+	private ArtifactInstaller artifactInstaller;
 
 	private <T> T mockComponent(final Class<T> type) throws Exception {
 		T mockedComponent = mock(type);
@@ -61,6 +66,7 @@ public class TestEmbeddedMavenBuilder {
 	@Before
 	public void setUp() throws Exception {
 		invoker = mockComponent(Invoker.class);
+		artifactInstaller = mockComponent(ArtifactInstaller.class);
 
 		when(invoker.execute(any(InvocationRequest.class)))
 				.thenReturn(mock(InvocationResult.class));
@@ -141,7 +147,14 @@ public class TestEmbeddedMavenBuilder {
 		Map<String, Object> properties = new HashMap<String, Object>();
 		properties.put("basedir", new File(basedir, "folder/module1"));
 
+		Map<String, Object> parentProperties = new HashMap<String, Object>();
+		parentProperties.put("groupId", "com.example");
+		parentProperties.put("artifactId", "test-parent");
+		parentProperties.put("version", "0.0.1-SNAPSHOT");
+
 		verify(invoker).execute(argThat(new ObjectPropertyMatcher<InvocationRequest>(properties)));
+		verify(artifactInstaller).install(eq(new File(basedir, "folder/pom.xml")),
+				argThat(new ObjectPropertyMatcher<Artifact>(parentProperties)), any(ArtifactRepository.class));
 	}
 
 	@Test
@@ -227,5 +240,15 @@ public class TestEmbeddedMavenBuilder {
 
 		artifact = createArtifact("com.example", "module1", "0.0.1-SNAPSHOT");
 		assertTrue("should find modules of the main project", lookupBuilder().canBuild(artifact, basedir));
+	}
+
+	@Test(expected = ArtifactBuildException.class)
+	public void testUnableToInstallParent() throws Exception {
+		Artifact artifact = createArtifact("com.example", "module1", "0.0.1-SNAPSHOT");
+		File basedir = new File(findProjectDirectory(), "non-rooted-multi-module");
+
+		doThrow(ArtifactBuildException.class).when(artifactInstaller).install(any(File.class), any(Artifact.class),
+				any(ArtifactRepository.class));
+		lookupBuilder().build(artifact, basedir, findProjectDirectory());
 	}
 }

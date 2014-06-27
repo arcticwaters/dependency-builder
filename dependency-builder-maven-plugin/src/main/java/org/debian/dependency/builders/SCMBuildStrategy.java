@@ -24,7 +24,6 @@ import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.Scm;
 import org.apache.maven.plugin.BuildPluginManager;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.project.DefaultProjectBuildingRequest;
@@ -75,12 +74,12 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 	@Override
 	public Set<Artifact> build(final DependencyNode root, final BuildSession session) throws ArtifactBuildException {
 		MavenProject project = constructProject(root.getArtifact(), session);
-		Scm scm = project.getScm();
-		if (scm == null) {
+		project = findProjectRoot(project);
+		if (project == null) {
 			return Collections.emptySet();
 		}
 
-		final File artifactDir = new File(session.getWorkDirectory(), root.getArtifact().toString());
+		final File artifactDir = new File(session.getWorkDirectory(), project.getId().toString());
 		artifactDir.mkdirs();
 
 		checkoutSource(project, artifactDir, session);
@@ -103,6 +102,25 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		// we got scm info from the root not, do not gate
 		built.addAll(builder.build(root.getArtifact(), artifactDir, session.getTargetRepository()));
 		return built;
+	}
+
+	/*
+	 * For multi-module projects, Maven appends the module name onto the scm url. Obviously this doesn't sit well
+	 * with every VCS, so we look for the project root instead.
+	 */
+	private MavenProject findProjectRoot(final MavenProject project) {
+		// if this project doesn't have one, then its parents won't have one either
+		if (project.getScm() == null) {
+			return null;
+		}
+
+		for (MavenProject parent = project; parent != null; parent = parent.getParent()) {
+			if (parent.getOriginalModel().getScm() != null) {
+				return parent;
+			}
+		}
+
+		return null;
 	}
 
 	@SuppressWarnings("PMD.PreserveStackTrace")

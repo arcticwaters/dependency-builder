@@ -93,6 +93,13 @@ public class DefaultDependencyCollector extends AbstractLogEnabled implements De
 			DependencyNode root = dependencyGraphBuilder.buildDependencyGraph(project, testScoped);
 
 			dependencies.visit(root);
+
+			if (root.getChildren() != null) {
+				for (DependencyNode child : root.getChildren()) {
+					child.accept(dependencies);
+				}
+			}
+
 			visitBuildExtensions(dependencies, project, filter, session);
 			visitPluginDependencies(dependencies, project, filter, session);
 			dependencies.endVisit(root);

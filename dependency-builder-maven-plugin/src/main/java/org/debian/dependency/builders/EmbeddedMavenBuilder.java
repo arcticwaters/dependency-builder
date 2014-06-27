@@ -24,13 +24,19 @@ import java.util.List;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.InvalidRepositoryException;
+import org.apache.maven.artifact.installer.ArtifactInstallationException;
+import org.apache.maven.artifact.installer.ArtifactInstaller;
+import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.model.Model;
+import org.apache.maven.model.Parent;
 import org.apache.maven.model.building.DefaultModelBuildingRequest;
 import org.apache.maven.model.building.FileModelSource;
 import org.apache.maven.model.building.ModelBuilder;
 import org.apache.maven.model.building.ModelBuildingException;
 import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.model.building.ModelBuildingResult;
+import org.apache.maven.repository.RepositorySystem;
 import org.apache.maven.shared.invoker.DefaultInvocationRequest;
 import org.apache.maven.shared.invoker.InvocationRequest;
 import org.apache.maven.shared.invoker.InvocationResult;
@@ -54,13 +60,41 @@ public class EmbeddedMavenBuilder extends AbstractLogEnabled implements SourceBu
 	private ModelBuilder modelBuilder;
 	@Requirement
 	private Invoker invoker;
+	@Requirement
+	private ArtifactInstaller installer;
+	@Requirement
+	private RepositorySystem repositorySystem;
 
 	@Override
 	public Set<Artifact> build(final Artifact artifact, final File basedir, final File localRepository) throws ArtifactBuildException {
-		File project = findReactor(artifact, basedir);
+		Model model = findProjectModel(artifact, basedir);
+
+		/*
+		 * Although using the install phase will catch attached artifacts for the project, it won't handle parent poms which are
+		 * in the same source repository. We choose to install manually instead of forking off another Maven process since you
+		 * won't have custom build steps for poms in general.
+		 */
+		try {
+			Model parentModel = model;
+			ArtifactRepository targetRepository = repositorySystem.createLocalRepository(localRepository);
+			for (Parent parent = parentModel.getParent(); parent != null; parent = parentModel.getParent()) {
+				parentModel = findProjectModel(parent.getGroupId(), parent.getArtifactId(), parent.getVersion(), basedir);
+				if (parentModel == null) {
+					break; // it's not in this repository
+				}
+
+				Artifact parentArtifact = repositorySystem.createProjectArtifact(parentModel.getGroupId(), parentModel.getArtifactId(),
+						parentModel.getVersion());
+				installer.install(parentModel.getPomFile(), parentArtifact, targetRepository);
+			}
+		} catch (ArtifactInstallationException e) {
+			throw new ArtifactBuildException("Unable to install parent", e);
+		} catch (InvalidRepositoryException e) {
+			throw new ArtifactBuildException(e);
+		}
 
 		InvocationRequest request = new DefaultInvocationRequest()
-				.setBaseDirectory(project)
+				.setBaseDirectory(model.getPomFile().getParentFile())
 				.setGoals(Arrays.asList("install"))
 				.setOffline(true)
 				.setRecursive(false) // in case we are dealing with a pom packaging
@@ -82,21 +116,25 @@ public class EmbeddedMavenBuilder extends AbstractLogEnabled implements SourceBu
 		}
 	}
 
-	private File findReactor(final Artifact artifact, final File basedir) throws ArtifactBuildException {
-		try {
-			List<File> poms = FileUtils.getFiles(basedir, POM_INCLUDES, FileUtils.getDefaultExcludesAsString());
+	private Model findProjectModel(final Artifact artifact, final File basedir) throws ArtifactBuildException {
+		return findProjectModel(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion(), basedir);
+	}
 
-			for (File pom : poms) {
+	private Model findProjectModel(final String groupId, final String artifactId, final String version, final File basedir)
+			throws ArtifactBuildException {
+		try {
+			for (File pom : findPoms(basedir)) {
 				try {
 					ModelBuildingRequest request = new DefaultModelBuildingRequest()
+							.setPomFile(pom)
 							.setModelSource(new FileModelSource(pom))
 							.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
 
 					Model model = modelBuilder.build(request).getEffectiveModel();
-					if (artifact.getGroupId().equals(model.getGroupId())
-							&& artifact.getArtifactId().equals(model.getArtifactId())
-							&& artifact.getVersion().equals(model.getVersion())) {
-						return pom.getParentFile();
+					if (model.getGroupId().equals(groupId)
+							&& model.getArtifactId().equals(artifactId)
+							&& model.getVersion().equals(version)) {
+						return model;
 					}
 				} catch (ModelBuildingException e) {
 					getLogger().debug("Ignoring unreadable pom file:" + pom, e);
@@ -105,18 +143,22 @@ public class EmbeddedMavenBuilder extends AbstractLogEnabled implements SourceBu
 		} catch (IOException e) {
 			throw new ArtifactBuildException(e);
 		}
-		throw new ArtifactBuildException("Unable to find reactor containing " + artifact + " under " + basedir);
+		throw new ArtifactBuildException("Unable to find reactor containing " + groupId + ":" + artifactId + ":" + version + " under "
+				+ basedir);
+	}
+
+	private List<File> findPoms(final File directory) throws IOException {
+		List<String> excludes = new ArrayList<String>(FileUtils.getDefaultExcludesAsList());
+		excludes.add(POM_EXCLUDES);
+		return FileUtils.getFiles(directory, POM_INCLUDES, StringUtils.join(excludes.iterator(), ","));
 	}
 
 	@Override
 	public boolean canBuild(final Artifact artifact, final File directory) throws IOException {
-		List<String> excludes = new ArrayList<String>(FileUtils.getDefaultExcludesAsList());
-		excludes.add(POM_EXCLUDES);
-		List<File> poms = FileUtils.getFiles(directory, POM_INCLUDES, StringUtils.join(excludes.iterator(), ","));
-
-		for (File pom : poms) {
+		for (File pom : findPoms(directory)) {
 			try {
 				ModelBuildingRequest request = new DefaultModelBuildingRequest()
+						.setPomFile(pom)
 						.setModelSource(new FileModelSource(pom))
 						.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
 
