@@ -68,8 +68,8 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 	private ProjectBuilder projectBuilder;
 	@Requirement
 	private BuildPluginManager buildPluginManager;
-	@Requirement(hint = "maven2")
-	private SourceBuilder builder;
+	@Requirement
+	private SourceBuilderManager sourceBuilderManager;
 
 	@Override
 	public Set<Artifact> build(final DependencyNode root, final BuildSession session) throws ArtifactBuildException {
@@ -83,30 +83,37 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		artifactDir.mkdirs();
 
 		checkoutSource(project, artifactDir, session);
-		final Set<Artifact> built = new HashSet<Artifact>();
 
 		DependencyCollectingVisitor visitor = new DependencyCollectingVisitor();
 		for (DependencyNode node : root.getChildren()) {
 			node.accept(visitor);
 		}
+
 		try {
+			SourceBuilder builder = sourceBuilderManager.detect(artifactDir);
+			if (builder == null) {
+				return Collections.emptySet();
+			}
+
+			final Set<Artifact> built = new HashSet<Artifact>();
 			for (Artifact artifact : visitor.artifacts) {
 				if (builder.canBuild(artifact, artifactDir)) {
 					built.addAll(builder.build(artifact, artifactDir, session.getTargetRepository()));
 				}
 			}
+
+			// we got scm info from root dependency node, it must be built
+			built.addAll(builder.build(root.getArtifact(), artifactDir, session.getTargetRepository()));
+			return built;
 		} catch (IOException e) {
 			throw new ArtifactBuildException(e);
 		}
 
-		// we got scm info from the root not, do not gate
-		built.addAll(builder.build(root.getArtifact(), artifactDir, session.getTargetRepository()));
-		return built;
 	}
 
 	/*
-	 * For multi-module projects, Maven appends the module name onto the scm url. Obviously this doesn't sit well
-	 * with every VCS, so we look for the project root instead.
+	 * For multi-module projects, Maven appends the module name onto the scm url. Obviously this doesn't sit well with every VCS,
+	 * so we look for the project root instead.
 	 */
 	private MavenProject findProjectRoot(final MavenProject project) {
 		// if this project doesn't have one, then its parents won't have one either

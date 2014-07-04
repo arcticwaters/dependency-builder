@@ -47,4 +47,18 @@ public interface SourceBuilder {
 	 * @throws IOException in case of errors
 	 */
 	boolean canBuild(Artifact artifact, File directory) throws IOException;
+
+	/**
+	 * Determines whether this builder can build any artifact in the given directory.
+	 *
+	 * @param directory directory to search
+	 * @return whether its possible to build any artifact from the directory
+	 * @throws IOException in case of errors
+	 */
+	boolean canBuild(File directory) throws IOException;
+
+	/**
+	 * @return priority to be used if multiple builders can build a directory (higher is better)
+	 */
+	int getPriority();
 }

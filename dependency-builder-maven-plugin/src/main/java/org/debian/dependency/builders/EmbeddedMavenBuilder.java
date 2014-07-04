@@ -55,6 +55,7 @@ import org.codehaus.plexus.util.StringUtils;
 public class EmbeddedMavenBuilder extends AbstractLogEnabled implements SourceBuilder {
 	private static final String POM_INCLUDES = "**/pom.xml";
 	private static final String POM_EXCLUDES = "**/src/**";
+	private static final int PRIORITY = 100;
 
 	@Requirement
 	private ModelBuilder modelBuilder;
@@ -174,5 +175,15 @@ public class EmbeddedMavenBuilder extends AbstractLogEnabled implements SourceBu
 			}
 		}
 		return false;
+	}
+
+	@Override
+	public boolean canBuild(final File directory) throws IOException {
+		return !findPoms(directory).isEmpty();
+	}
+
+	@Override
+	public int getPriority() {
+		return PRIORITY;
 	}
 }
