@@ -18,9 +18,12 @@ package org.debian.dependency;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.InvalidRepositoryException;
@@ -63,9 +66,32 @@ import org.debian.dependency.filters.InversionDependencyNodeFilter;
 /** Builds the dependencies of a project which deploys Maven metadata. */
 @Mojo(name = "build-dependencies")
 public class BuildDependencies extends AbstractMojo {
-	/** Artifact to try and build. */
-	@Parameter(required = true)
+	private static final String SUREFIRE_GROUPID = "org.apache.maven.surefire";
+	private static final String SUREFIRE_PLUGIN_VERSION = "{org.apache.maven.plugins:maven-surefire-plugin}";
+
+	/**
+	 * A single artifact to build. This parameter will be merged with {@link #artifacts} and built first if both are specified.
+	 *
+	 * @see #artifacts
+	 */
+	@Parameter
 	private String artifact;
+	/**
+	 * Defines all artifacts to build. This can be used to specify multiple artifacts to build, or implicit dependencies which are
+	 * not represented in the pom.
+	 * <p/>
+	 * Artifacts are defined in one of the following formats:
+	 * <ul>
+	 * <li><code>&lt;groupId&gt;:&lt;artifactId&gt;</code></li>
+	 * <li><code>&lt;groupId&gt;:&lt;artifactId&gt;:&lt;version&gt;</code></li>
+	 * <li><code>&lt;groupId&gt;:&lt;artifactId&gt;:{&lt;refGroupId&gt;:&lt;refArtifactId&gt;}</code></li>
+	 * </ul>
+	 * If the version is not specified, the latest available version will be selected. If the version is specified in the
+	 * <code>{*}</code> format, it can reference the version of another artifact which was resolved (the first one). It is
+	 * ignored, if no artifact can be found.
+	 */
+	@Parameter
+	private Set<String> artifacts = new LinkedHashSet<String>();
 	/** Where artifacts should be dumped after they are built. This can point to an existing repository or a new directory. */
 	@Parameter(required = true, defaultValue = "${project.build.directory}/dependency-builder/repository")
 	private File outputDirectory;
@@ -97,15 +123,19 @@ public class BuildDependencies extends AbstractMojo {
 
 	@Override
 	public void execute() throws MojoExecutionException, MojoFailureException {
+		if (artifact != null) {
+			Set<String> newArtifacts = new LinkedHashSet<String>();
+			newArtifacts.add(artifact);
+			newArtifacts.addAll(artifacts);
+			artifacts = newArtifacts;
+		}
+
 		setupDefaultIgnores();
-		Artifact artifactToBuild = createArtifact();
 
+		List<DependencyNode> graphs = createArtifactGraph();
 		try {
-			DependencyNode dependencies = dependencyCollector.resolveBuildDependencies(artifactToBuild.getGroupId(),
-					artifactToBuild.getArtifactId(), artifactToBuild.getVersion(), null, session);
-
-			List<DependencyNode> toInstall = collectArtifactRootsToInstall(dependencies);
-			DependencyNode toBuild = collectArtifactsToBuild(dependencies);
+			List<DependencyNode> toInstall = collectArtifactsToInstall(graphs);
+			List<DependencyNode> toBuild = collectArtifactsToBuild(graphs);
 			installArtifacts(toInstall);
 
 			BuildSession buildSession = new BuildSession(session);
@@ -113,30 +143,86 @@ public class BuildDependencies extends AbstractMojo {
 			buildSession.setWorkDirectory(workDirectory);
 			buildSession.setTargetRepository(outputDirectory);
 
-			Set<Artifact> builtArtifacts = scmBuildStrategy.build(toBuild, buildSession);
+			for (DependencyNode artifact : toBuild) {
+				Set<Artifact> builtArtifacts = scmBuildStrategy.build(artifact, buildSession);
 
-			List<DependencyNode> unmetDependencies = collectArtifactsToBuildNotBuilt(toBuild, builtArtifacts);
-			if (!unmetDependencies.isEmpty()) {
-				getLog().error("Some dependencies were not built, run again with the artifacts:");
-				for (DependencyNode node : unmetDependencies) {
-					getLog().error(" * " + node.getArtifact());
+				List<DependencyNode> unmetDependencies = findMissingDependencies(artifact, builtArtifacts);
+				if (!unmetDependencies.isEmpty()) {
+					getLog().error("Some dependencies were not built, run again with the artifacts:");
+					for (DependencyNode node : unmetDependencies) {
+						getLog().error(" * " + node.getArtifact());
+					}
+					throw new MojoFailureException("Unable to build artifact, unmet dependencies: " + artifact.getArtifact());
 				}
-				throw new MojoFailureException("Unable to build artifact, unmet dependencies: " + artifactToBuild);
 			}
-		} catch (DependencyResolutionException e) {
-			throw new MojoExecutionException("Unable to resolve dependencies for " + artifactToBuild, e);
 		} catch (ArtifactBuildException e) {
 			throw new MojoExecutionException("Unable to build artifacts", e);
 		}
 	}
 
+	private List<DependencyNode> createArtifactGraph() throws MojoExecutionException {
+		List<DependencyNode> result = new ArrayList<DependencyNode>();
+		List<String> versionReferencingArtifacts = new ArrayList<String>();
+
+		// stage 1 -- normal artifacts
+		for (String specifier : artifacts) {
+			Artifact artifact = createArtifact(specifier, Collections.<DependencyNode> emptyList());
+			if (artifact == null) {
+				versionReferencingArtifacts.add(specifier);
+				continue;
+			}
+
+			try {
+				result.add(resolveDependencies(artifact));
+			} catch (DependencyResolutionException e) {
+				throw new MojoExecutionException("Unable to resolve dependencies for " + artifact, e);
+			}
+		}
+
+		if (result.isEmpty()) {
+			throw new MojoExecutionException("Must specify at least 1 (non-referencing) artifact to build");
+		}
+
+		// stage 2 -- referencing artifacts
+		for (String specifier : versionReferencingArtifacts) {
+			Artifact artifact = createArtifact(specifier, result);
+			if (artifact != null) {
+				try {
+					result.add(resolveDependencies(artifact));
+				} catch (DependencyResolutionException e) {
+					throw new MojoExecutionException("Unable to resolve dependencies for " + artifact, e);
+				}
+			}
+		}
+
+		return result;
+	}
+
+	private DependencyNode resolveDependencies(final Artifact artifact) throws DependencyResolutionException {
+		// don't resolve build dependencies for artifacts that are going to be installed; they are not used
+		if (ignoreArtifacts.include(artifact)) {
+			return dependencyCollector.resolveProjectDependencies(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion(),
+					null, session);
+		}
+
+		return dependencyCollector.resolveBuildDependencies(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion(), null,
+				session);
+	}
+
 	private void setupDefaultIgnores() {
 		List<String> includes = new ArrayList<String>(ignoreArtifacts.getIncludes());
 		includes.add("org.apache.maven.plugins");
+		includes.add(SUREFIRE_GROUPID); // ensures dependencies below are installed
 		ignoreArtifacts.setIncludes(includes);
+
+		// implicit dependencies defined by the default plugins covered above in the most common packaging types
+		artifacts.add(String.format("%s:surefire-junit3:%s", SUREFIRE_GROUPID, SUREFIRE_PLUGIN_VERSION));
+		artifacts.add(String.format("%s:surefire-junit4:%s", SUREFIRE_GROUPID, SUREFIRE_PLUGIN_VERSION));
+		artifacts.add(String.format("%s:surefire-junit47:%s", SUREFIRE_GROUPID, SUREFIRE_PLUGIN_VERSION));
+		artifacts.add(String.format("%s:surefire-testng:%s", SUREFIRE_GROUPID, SUREFIRE_PLUGIN_VERSION));
 	}
 
-	private List<DependencyNode> collectArtifactsToBuildNotBuilt(final DependencyNode root, final Collection<Artifact> builtArtifacts) {
+	private List<DependencyNode> findMissingDependencies(final DependencyNode root, final Collection<Artifact> builtArtifacts) {
 		CollectingDependencyNodeVisitor collector = new CollectingDependencyNodeVisitor();
 		DependencyNodeVisitor filter = new FilteringDependencyNodeVisitor(collector, new AndDependencyNodeFilter(
 				// artifact to build and parent not ignored
@@ -148,60 +234,34 @@ public class BuildDependencies extends AbstractMojo {
 		return collector.getNodes();
 	}
 
-	private DependencyNode collectArtifactsToBuild(final DependencyNode root) {
-		BuildingDependencyNodeVisitor collector = new BuildingDependencyNodeVisitor();
-		DependencyNodeVisitor filter = new FilteringDependencyNodeVisitor(collector, new InversionDependencyNodeFilter(
-				new DependencyNodeAncestorOrSelfArtifactFilter(new ArtifactDependencyNodeFilter(ignoreArtifacts))));
-		root.accept(filter);
-		return collector.getDependencyTree();
-	}
+	private List<DependencyNode> collectArtifactsToBuild(final List<DependencyNode> graphs) {
+		List<DependencyNode> result = new ArrayList<DependencyNode>();
+		for (DependencyNode graph : graphs) {
+			BuildingDependencyNodeVisitor collector = new BuildingDependencyNodeVisitor();
+			DependencyNodeVisitor filter = new FilteringDependencyNodeVisitor(collector, new InversionDependencyNodeFilter(
+					new DependencyNodeAncestorOrSelfArtifactFilter(new ArtifactDependencyNodeFilter(ignoreArtifacts))));
+			graph.accept(filter);
 
-	@SuppressWarnings("PMD.AvoidDuplicateLiterals")
-	private List<DependencyNode> collectArtifactRootsToInstall(final DependencyNode root) throws MojoExecutionException {
-		CollectingDependencyNodeVisitor collector = new CollectingDependencyNodeVisitor();
-		DependencyNodeVisitor filter = new FilteringDependencyNodeVisitor(collector, new ArtifactDependencyNodeFilter(ignoreArtifacts));
-		root.accept(filter);
-
-		// FIXME: this is a horrible hack, how can we handle implicit dependencies added to the build at runtime?
-		List<DependencyNode> nodes = new ArrayList<DependencyNode>(collector.getNodes());
-		for (int i = 0; i < nodes.size(); ++i) {
-			DependencyNode node = nodes.get(i);
-			if ("org.apache.maven.plugins".equals(node.getArtifact().getGroupId())
-					&& "maven-surefire-plugin".equals(node.getArtifact().getArtifactId())) {
-				BuildingDependencyNodeVisitor visitor = new BuildingDependencyNodeVisitor();
-
-				// graft implicit surefire dependencies
-				visitor.visit(node);
-				for (DependencyNode child : node.getChildren()) {
-					child.accept(visitor);
-				}
-
-				try {
-					DependencyNode junit3Provider = dependencyCollector.resolveProjectDependencies("org.apache.maven.surefire",
-							"surefire-junit3", node.getArtifact().getVersion(), null, session);
-					junit3Provider.accept(visitor);
-
-					DependencyNode junit4Provider = dependencyCollector.resolveProjectDependencies("org.apache.maven.surefire",
-							"surefire-junit4", node.getArtifact().getVersion(), null, session);
-					junit4Provider.accept(visitor);
-					DependencyNode junit47Provider = dependencyCollector.resolveProjectDependencies("org.apache.maven.surefire",
-							"surefire-junit47", node.getArtifact().getVersion(), null, session);
-					junit47Provider.accept(visitor);
-
-					DependencyNode testngProvider = dependencyCollector.resolveProjectDependencies("org.apache.maven.surefire",
-							"surefire-testng", node.getArtifact().getVersion(), null, session);
-					testngProvider.accept(visitor);
-				} catch (DependencyResolutionException e) {
-					throw new MojoExecutionException("Unable to resolve artifacts", e);
-				}
-
-				visitor.endVisit(node);
-
-				nodes.set(i, visitor.getDependencyTree());
+			DependencyNode node = collector.getDependencyTree();
+			if (node != null) {
+				result.add(node);
 			}
 		}
+		return result;
+	}
 
-		return nodes;
+	private List<DependencyNode> collectArtifactsToInstall(final List<DependencyNode> graphs) throws MojoExecutionException {
+		List<DependencyNode> result = new ArrayList<DependencyNode>();
+
+		for (DependencyNode graph : graphs) {
+			CollectingDependencyNodeVisitor collector = new CollectingDependencyNodeVisitor();
+			DependencyNodeVisitor filter = new FilteringDependencyNodeVisitor(collector, new ArtifactDependencyNodeFilter(ignoreArtifacts));
+			graph.accept(filter);
+
+			result.addAll(collector.getNodes());
+		}
+
+		return result;
 	}
 
 	private Artifact resolveArtifact(final Artifact toResolve) {
@@ -267,28 +327,72 @@ public class BuildDependencies extends AbstractMojo {
 		}
 	}
 
-	@SuppressWarnings("checkstyle:magicnumber")
-	private Artifact createArtifact() throws MojoExecutionException, MojoFailureException {
-		String[] parts = artifact.split(":");
+	private Artifact createArtifact(final String specifier, final List<DependencyNode> graphs) throws MojoExecutionException {
+		Pattern artifactPattern = Pattern.compile("^([^:]+):([^:]+)(?::\\{([^:]+):([^:]+)\\}|:(.+))?$");
+		final int refGroupIdGroup = 3; // NOPMD
+		final int refArtifactGroup = 4; // NOPMD
+		final int versionGroup = 5; // NOPMD
 
-		String groupId;
-		String artifactId;
-		String version = "LATEST";
-
-		switch (parts.length) {
-		case 3:
-			groupId = parts[0];
-			artifactId = parts[1];
-			version = parts[2];
-			break;
-		case 2:
-			groupId = parts[0];
-			artifactId = parts[1];
-			break;
-		default:
-			throw new MojoFailureException("Artifact parameter must conform to 'groupId:artifactId[:version]'.");
+		Matcher matcher = artifactPattern.matcher(specifier);
+		if (!matcher.find()) {
+			throw new MojoExecutionException("Artifact `" + specifier
+					+ "` is not valid, must `have format <groupId>:<artifactId> or <groupId>:<artifactId>:<version>");
 		}
 
-		return repositorySystem.createProjectArtifact(groupId, artifactId, version);
+		String groupId = matcher.group(1);
+		String artifactId = matcher.group(2);
+		String version = "LATEST";
+
+		if (matcher.group(versionGroup) != null) {
+			version = matcher.group(versionGroup);
+		}
+
+		// specifier can be resolved now completely
+		if (matcher.group(refGroupIdGroup) == null || matcher.group(refArtifactGroup) == null) {
+			return repositorySystem.createProjectArtifact(groupId, artifactId, version);
+		}
+
+		// otherwise it must be a referencing another artifact
+		String refGroupId = matcher.group(refGroupIdGroup);
+		String refArtifactId = matcher.group(refArtifactGroup);
+		for (DependencyNode graph : graphs) {
+			DetectArtifactVisitor visitor = new DetectArtifactVisitor(refGroupId, refArtifactId);
+			graph.accept(visitor);
+
+			if (visitor.foundArtifact != null) {
+				return repositorySystem.createProjectArtifact(groupId, artifactId, visitor.foundArtifact.getVersion());
+			}
+		}
+
+		return null;
+	}
+
+	/** Detects an artifact with a particular group and artifact id. */
+	private static class DetectArtifactVisitor implements DependencyNodeVisitor {
+		private final String groupId;
+		private final String artifactId;
+		private Artifact foundArtifact;
+		private boolean stillLooking = true;
+
+		public DetectArtifactVisitor(final String groupId, final String artifactId) {
+			this.groupId = groupId;
+			this.artifactId = artifactId;
+		}
+
+		@Override
+		public boolean visit(final DependencyNode node) {
+			Artifact artifact = node.getArtifact();
+			if (stillLooking && artifact.getGroupId().equals(groupId) && artifact.getArtifactId().equals(artifactId)) {
+				stillLooking = false;
+				foundArtifact = artifact;
+			}
+
+			return stillLooking;
+		}
+
+		@Override
+		public boolean endVisit(final DependencyNode node) {
+			return stillLooking;
+		}
 	}
 }

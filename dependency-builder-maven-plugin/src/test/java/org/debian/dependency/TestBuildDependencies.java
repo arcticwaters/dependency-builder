@@ -41,6 +41,7 @@ import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.Plugin;
 import org.apache.maven.plugin.Mojo;
 import org.apache.maven.plugin.MojoExecution;
+import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugin.testing.MojoRule;
 import org.apache.maven.plugin.testing.ResolverExpressionEvaluatorStub;
@@ -178,6 +179,14 @@ public class TestBuildDependencies {
 		}
 
 		return graph;
+	}
+
+	@Test(expected = MojoExecutionException.class)
+	public void testOnlyReferencingArtifacts() throws Exception {
+		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
+		config.addChild("artifact", "some:artifact:{referencing:artifact}");
+
+		lookupConfiguredMojo(config).execute();
 	}
 
 	@Test(expected = MojoFailureException.class)
@@ -394,6 +403,9 @@ public class TestBuildDependencies {
 
 		when(collector.resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
 				.thenReturn(root);
+		when(collector.resolveProjectDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class),
+						any(MavenSession.class)))
+				.thenReturn(root);
 		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
 				.thenReturn(toArtifactSet(root));
 
@@ -411,20 +423,73 @@ public class TestBuildDependencies {
 		verify(buildStrategy).build(argThat(new DependencyNodeArtifactMatcher(root)), any(BuildSession.class));
 	}
 
-	private Set<Artifact> toArtifactSet(final DependencyNode node) {
-		final Set<Artifact> results = new HashSet<Artifact>();
-		node.accept(new DependencyNodeVisitor() {
-			@Override
-			public boolean visit(final DependencyNode node) {
-				results.add(node.getArtifact());
-				return true;
-			}
+	@Test
+	public void testImplicitSurefireDependencies() throws Exception {
+		DependencyNode root = createNode(null, "root", "root", "1");
+		DependencyNode surefireNode = createNode(root, "org.apache.maven.plugins", "surefire-maven-plugin", "2.3");
 
-			@Override
-			public boolean endVisit(final DependencyNode node) {
-				return true;
-			}
-		});
+		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
+				.thenReturn(root);
+		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
+				.thenReturn(toArtifactSet(root));
+		when(collector.resolveProjectDependencies(eq("org.apache.maven.plugins"), eq("surefire-maven-plugin"), eq("2.3"),
+				any(ArtifactFilter.class), any(MavenSession.class)))
+				.thenReturn(surefireNode);
+		when(collector.resolveBuildDependencies(eq("org.apache.maven.surefire"), any(String.class), eq("2.3"),
+				any(ArtifactFilter.class), any(MavenSession.class)))
+				.thenAnswer(new Answer<DependencyNode>() {
+					@Override
+					public DependencyNode answer(final InvocationOnMock invocation) throws Throwable {
+						Object[] args = invocation.getArguments();
+						return createNode(null, args[0].toString(), args[1].toString(), args[2].toString());
+					}
+				});
+
+		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
+		config.addChild("artifact", "some:artifact");
+
+		lookupConfiguredMojo(config).execute();
+
+		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(surefireNode.getArtifact())), any(ArtifactRepository.class));
+	}
+
+	@Test
+	public void testMultipleArtifacts() throws Exception {
+		DependencyNode root = createNode(null, "root", "root", "1");
+		DependencyNode fooNode = createNode(null, "foo", "bar", "baz");
+
+		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
+				.thenReturn(root);
+		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
+				.thenReturn(toArtifactSet(root, fooNode));
+		when(collector.resolveBuildDependencies(eq("foo"), eq("bar"), eq("baz"), any(ArtifactFilter.class), any(MavenSession.class)))
+				.thenReturn(fooNode);
+
+		PlexusConfiguration artifacts = new DefaultPlexusConfiguration("artifacts");
+		artifacts.addChild("artifact", "foo:bar:baz");
+		artifacts.addChild("artifact", "some:artifact");
+		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
+		config.addChild(artifacts);
+
+		lookupConfiguredMojo(config).execute();
+	}
+
+	private Set<Artifact> toArtifactSet(final DependencyNode... nodes) {
+		final Set<Artifact> results = new HashSet<Artifact>();
+		for (DependencyNode node : nodes) {
+			node.accept(new DependencyNodeVisitor() {
+				@Override
+				public boolean visit(final DependencyNode node) {
+					results.add(node.getArtifact());
+					return true;
+				}
+
+				@Override
+				public boolean endVisit(final DependencyNode node) {
+					return true;
+				}
+			});
+		}
 		return results;
 	}
 }
