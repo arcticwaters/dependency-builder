@@ -61,11 +61,7 @@ public class DefaultDependencyCollector extends AbstractLogEnabled implements De
 		MavenProject project = buildProject(groupId, artifactId, version, session);
 		try {
 			AndArtifactFilter realFilter = new AndArtifactFilter();
-			/*
-			 * This scope should really be runtime, but due to MNG-5197, we must resolve everything. Note that
-			 * m2e is able to work around but they appear to use a different version of aether than the one packaged
-			 * with Maven 3.0.5 (the embedded version in m2e).
-			 */
+			// this scope should really be runtime, but due to MNG-5197, we must resolve everything
 			realFilter.add(new ScopeArtifactFilter(Artifact.SCOPE_TEST));
 			if (filter != null) {
 				realFilter.add(filter);
