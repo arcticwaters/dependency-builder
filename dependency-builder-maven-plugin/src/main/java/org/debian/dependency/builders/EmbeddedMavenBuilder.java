@@ -47,6 +47,7 @@ import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.logging.AbstractLogEnabled;
 import org.codehaus.plexus.util.FileUtils;
 import org.codehaus.plexus.util.StringUtils;
+import org.eclipse.jgit.api.Git;
 
 /**
  * Builds a Maven project using an embedded version of Maven.
@@ -67,7 +68,8 @@ public class EmbeddedMavenBuilder extends AbstractLogEnabled implements SourceBu
 	private RepositorySystem repositorySystem;
 
 	@Override
-	public Set<Artifact> build(final Artifact artifact, final File basedir, final File localRepository) throws ArtifactBuildException {
+	public Set<Artifact> build(final Artifact artifact, final Git repository, final File localRepository) throws ArtifactBuildException {
+		File basedir = repository.getRepository().getWorkTree();
 		Model model = findProjectModel(artifact, basedir);
 
 		/*

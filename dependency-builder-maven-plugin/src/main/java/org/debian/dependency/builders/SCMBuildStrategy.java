@@ -38,6 +38,13 @@ import org.codehaus.plexus.component.annotations.Component;
 import org.codehaus.plexus.component.annotations.Configuration;
 import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.logging.AbstractLogEnabled;
+import org.codehaus.plexus.util.FileUtils;
+import org.eclipse.jgit.api.CheckoutCommand;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.RmCommand;
+import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.errors.RepositoryNotFoundException;
+import org.eclipse.jgit.lib.Ref;
 import org.twdata.maven.mojoexecutor.MojoExecutor;
 
 /**
@@ -47,6 +54,7 @@ import org.twdata.maven.mojoexecutor.MojoExecutor;
  */
 @Component(role = BuildStrategy.class, hint = "scm")
 public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrategy {
+	private static final String WORK_BRANCH = "dependency-builder-maven-plugin";
 	@Configuration(value = "org.apache.maven.plugins")
 	private String scmPluginGroupId;
 	@Configuration(value = "maven-scm-plugin")
@@ -79,10 +87,13 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 			return Collections.emptySet();
 		}
 
-		final File artifactDir = new File(session.getWorkDirectory(), project.getId().toString());
-		artifactDir.mkdirs();
+		File checkoutDir = new File(session.getCheckoutDirectory(), project.getId().toString());
+		checkoutDir.mkdirs();
+		File workDir = new File(session.getWorkDirectory(), project.getId().toString());
+		workDir.mkdirs();
 
-		checkoutSource(project, artifactDir, session);
+		String scmUrl = checkoutSource(project, checkoutDir, session);
+		Git git = makeLocalCopy(checkoutDir, workDir, scmUrl);
 
 		DependencyCollectingVisitor visitor = new DependencyCollectingVisitor();
 		for (DependencyNode node : root.getChildren()) {
@@ -90,25 +101,90 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		}
 
 		try {
-			SourceBuilder builder = sourceBuilderManager.detect(artifactDir);
+			SourceBuilder builder = sourceBuilderManager.detect(checkoutDir);
 			if (builder == null) {
 				return Collections.emptySet();
 			}
 
 			final Set<Artifact> built = new HashSet<Artifact>();
 			for (Artifact artifact : visitor.artifacts) {
-				if (builder.canBuild(artifact, artifactDir)) {
-					built.addAll(builder.build(artifact, artifactDir, session.getTargetRepository()));
+				if (builder.canBuild(artifact, checkoutDir)) {
+					built.addAll(builder.build(artifact, git, session.getTargetRepository()));
 				}
 			}
 
 			// we got scm info from root dependency node, it must be built
-			built.addAll(builder.build(root.getArtifact(), artifactDir, session.getTargetRepository()));
+			built.addAll(builder.build(root.getArtifact(), git, session.getTargetRepository()));
 			return built;
 		} catch (IOException e) {
 			throw new ArtifactBuildException(e);
 		}
 
+	}
+
+	private Git makeLocalCopy(final File checkoutDir, final File workDir, final String scmUrl) throws ArtifactBuildException {
+		try {
+			// if the work directory is already a git repo, we assume its setup correctly
+			try {
+				Git git = Git.open(workDir);
+				ensureOnCorrectBranch(git);
+				return git;
+			} catch (RepositoryNotFoundException e) {
+				getLogger().debug("No repository found at " + workDir + ", creating from " + checkoutDir);
+			}
+
+			// otherwise we need to make a copy from the checkout
+			Git git;
+			try {
+				// check to see if we checked out a git repo
+				Git.open(checkoutDir);
+
+				FileUtils.copyDirectoryStructure(checkoutDir, workDir);
+				git = Git.open(workDir);
+			} catch (RepositoryNotFoundException e) {
+				FileUtils.copyDirectoryStructure(checkoutDir, workDir);
+
+				git = Git.init().setDirectory(workDir).call();
+				git.add().addFilepattern(".").call();
+
+				// we don't want to track other SCM metadata files
+				RmCommand removeAction = git.rm();
+				for (String pattern : FileUtils.getDefaultExcludes()) {
+					removeAction.addFilepattern(pattern);
+				}
+				removeAction.call();
+
+				git.commit().setMessage("Import upstream from " + scmUrl).call();
+			}
+
+			ensureOnCorrectBranch(git);
+			return git;
+		} catch (IOException e) {
+			throw new ArtifactBuildException(e);
+		} catch (GitAPIException e) {
+			throw new ArtifactBuildException(e);
+		}
+	}
+
+	private void ensureOnCorrectBranch(final Git git) throws GitAPIException {
+		String workBranchRefName = "refs/heads/" + WORK_BRANCH;
+
+		// make sure that we are on the right branch, again assume its setup correctly if there
+		Ref branchRef = null;
+		for (Ref ref : git.branchList().call()) {
+			if (workBranchRefName.equals(ref.getName())) {
+				branchRef = ref;
+				break;
+			}
+		}
+
+		CheckoutCommand command = git.checkout().setName(WORK_BRANCH);
+		if (branchRef == null) {
+			command.setCreateBranch(true);
+		}
+		command.call();
+
+		git.clean().setCleanDirectories(true).call();
 	}
 
 	/*
@@ -131,7 +207,7 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 	}
 
 	@SuppressWarnings("PMD.PreserveStackTrace")
-	private void checkoutSource(final MavenProject resolvedProject, final File artifactDir, final BuildSession buildSession)
+	private String checkoutSource(final MavenProject resolvedProject, final File artifactDir, final BuildSession buildSession)
 			throws ArtifactBuildException {
 		MavenSession mavenSession = buildSession.getMavenSession();
 		MavenProject currentProject = mavenSession.getCurrentProject();
@@ -150,6 +226,7 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 								),
 						MojoExecutor.executionEnvironment(currentProject, mavenSession, buildPluginManager)
 						);
+				return resolvedProject.getScm().getDeveloperConnection();
 			} catch (MojoExecutionException e) {
 				try {
 					// now the regular connection
@@ -162,6 +239,7 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 									),
 							MojoExecutor.executionEnvironment(currentProject, mavenSession, buildPluginManager)
 							);
+					return resolvedProject.getScm().getConnection();
 				} catch (MojoExecutionException f) {
 					throw new ArtifactBuildException(f);
 				}

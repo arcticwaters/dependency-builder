@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
+import org.eclipse.jgit.api.Git;
 
 /** Defines a means of building a particular project. */
 public interface SourceBuilder {
@@ -29,12 +30,12 @@ public interface SourceBuilder {
 	 * install into the repository otherwise it is assumed to have been installed already.
 	 *
 	 * @param artifact artifact to build
-	 * @param basedir directory where the artifact source resides
+	 * @param repository a non-bare git repository
 	 * @param localRepository repository that should be used for resolution
 	 * @return original artifact with any attached artifacts
 	 * @throws ArtifactBuildException in we are unable to build the artifact
 	 */
-	Set<Artifact> build(Artifact artifact, File basedir, File localRepository) throws ArtifactBuildException;
+	Set<Artifact> build(Artifact artifact, Git repository, File localRepository) throws ArtifactBuildException;
 
 	/**
 	 * A hint to whether this builder can build an artifact from the given directory. The given artifact is not guaranteed to

@@ -101,8 +101,11 @@ public class BuildDependencies extends AbstractMojo {
 	 */
 	@Parameter
 	private final StrictPatternArtifactFilter ignoreArtifacts = new StrictPatternArtifactFilter(false);
-	/** Directory where artifact sources will be built from. */
+	/** Directory where artifact sources should be checked out to. */
 	@Parameter(defaultValue = "${project.build.directory}/dependency-builder/checkout")
+	private File checkoutDirectory;
+	/** Directory where local git repositories should be made for potential modifications. */
+	@Parameter(defaultValue = "${project.build.directory}/dependency-builder/work")
 	private File workDirectory;
 
 	@Parameter(defaultValue = "${session}")
@@ -140,6 +143,7 @@ public class BuildDependencies extends AbstractMojo {
 
 			BuildSession buildSession = new BuildSession(session);
 			buildSession.setExtensions(execution.getPlugin().getDependencies());
+			buildSession.setCheckoutDirectory(checkoutDirectory);
 			buildSession.setWorkDirectory(workDirectory);
 			buildSession.setTargetRepository(outputDirectory);
 

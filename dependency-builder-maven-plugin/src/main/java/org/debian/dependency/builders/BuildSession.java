@@ -27,6 +27,7 @@ import org.apache.maven.model.Dependency;
 public class BuildSession {
 	private final MavenSession session;
 	private List<Dependency> extensions;
+	private File checkoutDirectory;
 	private File workDirectory;
 	private File targetRepository;
 
@@ -56,19 +57,35 @@ public class BuildSession {
 	}
 
 	/**
-	 * @return where to operate on files
+	 * @return where a local copy of files to use are
 	 */
 	public File getWorkDirectory() {
 		return workDirectory;
 	}
 
 	/**
-	 * Sets where to operate on files.
+	 * Where checked out files are copied to so they can be modified.
 	 *
-	 * @param workDirectory where to operate on files
+	 * @param workDirectory where local files should live
 	 */
 	public void setWorkDirectory(final File workDirectory) {
 		this.workDirectory = workDirectory;
+	}
+
+	/**
+	 * @return folder where files are checked out
+	 */
+	public File getCheckoutDirectory() {
+		return checkoutDirectory;
+	}
+
+	/**
+	 * The folder where files are checked out from their SCM.
+	 *
+	 * @param checkoutDirectory where to checkout files
+	 */
+	public void setCheckoutDirectory(final File checkoutDirectory) {
+		this.checkoutDirectory = checkoutDirectory;
 	}
 
 	/**
