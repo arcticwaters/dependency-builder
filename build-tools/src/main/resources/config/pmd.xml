@@ -12,7 +12,14 @@
 	<rule ref="rulesets/java/clone.xml" />
 	<rule ref="rulesets/java/strings.xml" />
 	<rule ref="rulesets/java/sunsecure.xml" />
-	<rule ref="rulesets/java/codesize.xml" />
+	<rule ref="rulesets/java/codesize.xml">
+	   <exclude name="TooManyMethods"/>
+	</rule>
+	<rule ref="rulesets/java/codesize.xml/TooManyMethods">
+	   <properties>
+	       <property name="maxmethods" value="15" />
+	   </properties>
+	</rule>
 
 	<rule ref="rulesets/java/naming.xml">
 		<exclude name="LongVariable" />
