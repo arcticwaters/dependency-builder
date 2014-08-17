@@ -44,19 +44,15 @@ import org.apache.maven.shared.invoker.Invoker;
 import org.apache.maven.shared.invoker.MavenInvocationException;
 import org.codehaus.plexus.component.annotations.Component;
 import org.codehaus.plexus.component.annotations.Requirement;
-import org.codehaus.plexus.logging.AbstractLogEnabled;
-import org.codehaus.plexus.util.FileUtils;
-import org.codehaus.plexus.util.StringUtils;
 import org.eclipse.jgit.api.Git;
 
 /**
  * Builds a Maven project using an embedded version of Maven.
  */
 @Component(role = SourceBuilder.class, hint = "maven2")
-public class EmbeddedMavenBuilder extends AbstractLogEnabled implements SourceBuilder {
+public class EmbeddedMavenBuilder extends AbstractBuildFileSourceBuilder implements SourceBuilder {
 	private static final String POM_INCLUDES = "**/pom.xml";
 	private static final String POM_EXCLUDES = "**/src/**";
-	private static final int PRIORITY = 100;
 
 	@Requirement
 	private ModelBuilder modelBuilder;
@@ -126,7 +122,7 @@ public class EmbeddedMavenBuilder extends AbstractLogEnabled implements SourceBu
 	private Model findProjectModel(final String groupId, final String artifactId, final String version, final File basedir)
 			throws ArtifactBuildException {
 		try {
-			for (File pom : findPoms(basedir)) {
+			for (File pom : findBuildFiles(basedir)) {
 				try {
 					ModelBuildingRequest request = new DefaultModelBuildingRequest()
 							.setPomFile(pom)
@@ -150,15 +146,9 @@ public class EmbeddedMavenBuilder extends AbstractLogEnabled implements SourceBu
 				+ basedir);
 	}
 
-	private List<File> findPoms(final File directory) throws IOException {
-		List<String> excludes = new ArrayList<String>(FileUtils.getDefaultExcludesAsList());
-		excludes.add(POM_EXCLUDES);
-		return FileUtils.getFiles(directory, POM_INCLUDES, StringUtils.join(excludes.iterator(), ","));
-	}
-
 	@Override
 	public boolean canBuild(final Artifact artifact, final File directory) throws IOException {
-		for (File pom : findPoms(directory)) {
+		for (File pom : findBuildFiles(directory)) {
 			try {
 				ModelBuildingRequest request = new DefaultModelBuildingRequest()
 						.setPomFile(pom)
@@ -180,12 +170,14 @@ public class EmbeddedMavenBuilder extends AbstractLogEnabled implements SourceBu
 	}
 
 	@Override
-	public boolean canBuild(final File directory) throws IOException {
-		return !findPoms(directory).isEmpty();
+	protected List<String> getIncludes() {
+		return Arrays.asList(POM_INCLUDES);
 	}
 
 	@Override
-	public int getPriority() {
-		return PRIORITY;
+	protected List<String> getExcludes() {
+		List<String> result = new ArrayList<String>(super.getExcludes());
+		result.add(POM_EXCLUDES);
+		return result;
 	}
 }

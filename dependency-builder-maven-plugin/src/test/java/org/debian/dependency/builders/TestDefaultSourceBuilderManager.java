@@ -43,11 +43,11 @@ public class TestDefaultSourceBuilderManager {
 		when(noPriorityBuilder.getPriority(any(File.class)))
 				.thenReturn(noPriority);
 		when(lowPriorityBuilder.getPriority(any(File.class)))
-				.thenReturn(highPriority);
+				.thenReturn(lowPriority);
 		when(midPriorityBuilder.getPriority(any(File.class)))
 				.thenReturn(midPriority);
 		when(highPriorityBuilder.getPriority(any(File.class)))
-				.thenReturn(lowPriority);
+				.thenReturn(highPriority);
 
 		sourceBuilderManager.addSourceBuilder(noPriorityBuilder);
 		sourceBuilderManager.addSourceBuilder(lowPriorityBuilder);

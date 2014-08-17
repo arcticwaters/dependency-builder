@@ -31,7 +31,7 @@ public class DefaultSourceBuilderManager extends AbstractLogEnabled implements S
 	@Requirement(role = SourceBuilder.class)
 	private List<SourceBuilder> builders = new ArrayList<SourceBuilder>();
 
-	/* package */void setBuilders(final List<SourceBuilder> builders) {
+	public void setBuilders(final List<SourceBuilder> builders) {
 		// new list so that we can modify it
 		this.builders = new ArrayList<SourceBuilder>(builders);
 	}
@@ -39,10 +39,11 @@ public class DefaultSourceBuilderManager extends AbstractLogEnabled implements S
 	@Override
 	public SourceBuilder detect(final File directory) throws IOException {
 		SourceBuilder priorityBuilder = null;
-		int priority = 0;
+		int priority = Integer.MAX_VALUE;
 		for (SourceBuilder builder : builders) {
-			if (builder.canBuild(directory) && builder.getPriority() > priority) {
-				priority = builder.getPriority();
+			int builderPriority = builder.getPriority(directory);
+			if (builderPriority >= 0 && builderPriority <= priority) {
+				priority = builderPriority;
 				priorityBuilder = builder;
 			}
 		}

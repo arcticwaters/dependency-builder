@@ -24,6 +24,9 @@ import org.eclipse.jgit.api.Git;
 
 /** Defines a means of building a particular project. */
 public interface SourceBuilder {
+	/** It is recommended that builders use this distance between 2 closest priorities to enable extension between them. */
+	int PRIORITY_STEP = 100;
+
 	/**
 	 * Builds the {@link Artifact} located under the given directory. It is not guaranteed that the artifact is in the root of the
 	 * given directory. Each returned artifact must set the artifact file appropriately: if given it is up to the caller to
@@ -50,16 +53,12 @@ public interface SourceBuilder {
 	boolean canBuild(Artifact artifact, File directory) throws IOException;
 
 	/**
-	 * Determines whether this builder can build any artifact in the given directory.
+	 * Gets the priority of this builder for the given directory. A small number (including zero) denotes a high priority. A
+	 * negative number should be taken as a failure instead of a very high priority.
 	 *
-	 * @param directory directory to search
-	 * @return whether its possible to build any artifact from the directory
+	 * @param directory directory that would be built
+	 * @return priority of the builder with small numbers being a high priority (negative values a failure)
 	 * @throws IOException in case of errors
 	 */
-	boolean canBuild(File directory) throws IOException;
-
-	/**
-	 * @return priority to be used if multiple builders can build a directory (higher is better)
-	 */
-	int getPriority();
+	int getPriority(File directory) throws IOException;
 }
