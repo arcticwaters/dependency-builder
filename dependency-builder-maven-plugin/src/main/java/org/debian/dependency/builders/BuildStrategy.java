@@ -33,4 +33,9 @@ public interface BuildStrategy {
 	 * @throws ArtifactBuildException in case of errors
 	 */
 	Set<Artifact> build(DependencyNode graph, BuildSession session) throws ArtifactBuildException;
+
+	/**
+	 * @return priority of the builder with small numbers being a high priority (negative values a failure)
+	 */
+	int getPriority();
 }

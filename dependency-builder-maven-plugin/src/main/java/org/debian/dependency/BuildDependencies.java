@@ -19,6 +19,8 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -64,6 +66,7 @@ import org.debian.dependency.filters.IdentityArtifactFilter;
 import org.debian.dependency.filters.InversionDependencyNodeFilter;
 
 /** Builds the dependencies of a project which deploys Maven metadata. */
+@SuppressWarnings("PMD.GodClass")
 @Mojo(name = "build-dependencies")
 public class BuildDependencies extends AbstractMojo {
 	private static final String SUREFIRE_GROUPID = "org.apache.maven.surefire";
@@ -107,6 +110,9 @@ public class BuildDependencies extends AbstractMojo {
 	/** Directory where local git repositories should be made for potential modifications. */
 	@Parameter(defaultValue = "${project.build.directory}/dependency-builder/work")
 	private File workDirectory;
+	/** Whether to allow more than a single project to be built. */
+	@Parameter
+	private boolean multiProject;
 
 	@Parameter(defaultValue = "${session}")
 	private MavenSession session;
@@ -117,8 +123,8 @@ public class BuildDependencies extends AbstractMojo {
 	private RepositorySystem repositorySystem;
 	@Component
 	private ArtifactInstaller artifactInstaller;
-	@Component(hint = "scm")
-	private BuildStrategy scmBuildStrategy;
+	@Component(role = BuildStrategy.class)
+	private List<BuildStrategy> buildStrategies;
 	@Component
 	private DependencyCollector dependencyCollector;
 	@Component
@@ -134,33 +140,70 @@ public class BuildDependencies extends AbstractMojo {
 		}
 
 		setupDefaultIgnores();
+		buildStrategies = new ArrayList<BuildStrategy>(buildStrategies);
+		Collections.sort(buildStrategies, new Comparator<BuildStrategy>() {
+			@Override
+			public int compare(final BuildStrategy strategy1, final BuildStrategy strategy2) {
+				return strategy1.getPriority() - strategy2.getPriority();
+			}
+		});
 
 		List<DependencyNode> graphs = createArtifactGraph();
-		try {
-			List<DependencyNode> toInstall = collectArtifactsToInstall(graphs);
-			List<DependencyNode> toBuild = collectArtifactsToBuild(graphs);
-			installArtifacts(toInstall);
+		List<DependencyNode> toInstall = collectArtifactsToInstall(graphs);
+		List<DependencyNode> toBuild = collectArtifactsToBuild(graphs);
+		installArtifacts(toInstall);
 
-			BuildSession buildSession = new BuildSession(session);
-			buildSession.setExtensions(execution.getPlugin().getDependencies());
-			buildSession.setCheckoutDirectory(checkoutDirectory);
-			buildSession.setWorkDirectory(workDirectory);
-			buildSession.setTargetRepository(outputDirectory);
+		BuildSession buildSession = new BuildSession(session);
+		buildSession.setExtensions(execution.getPlugin().getDependencies());
+		buildSession.setCheckoutDirectory(checkoutDirectory);
+		buildSession.setWorkDirectory(workDirectory);
+		buildSession.setTargetRepository(outputDirectory);
 
-			for (DependencyNode artifact : toBuild) {
-				Set<Artifact> builtArtifacts = scmBuildStrategy.build(artifact, buildSession);
+		while (!toBuild.isEmpty()) {
+			DependencyNode artifact = toBuild.get(0);
 
-				List<DependencyNode> unmetDependencies = findMissingDependencies(artifact, builtArtifacts);
-				if (!unmetDependencies.isEmpty()) {
-					getLog().error("Some dependencies were not built, run again with the artifacts:");
-					for (DependencyNode node : unmetDependencies) {
-						getLog().error(" * " + node.getArtifact());
+			// try and build it
+			Set<Artifact> builtArtifacts = null;
+			for (BuildStrategy buildStrategy : buildStrategies) {
+				try {
+					getLog().debug("Attempting to build with " + buildStrategy);
+					builtArtifacts = buildStrategy.build(artifact, buildSession);
+					if (builtArtifacts != null && !builtArtifacts.isEmpty()) {
+						getLog().debug("Artifacts built with strategy!");
+						break;
 					}
-					throw new MojoFailureException("Unable to build artifact, unmet dependencies: " + artifact.getArtifact());
+				} catch (ArtifactBuildException e) {
+					getLog().debug("Unable to build with strategy " + buildStrategy + ", trying next one", e);
 				}
 			}
-		} catch (ArtifactBuildException e) {
-			throw new MojoExecutionException("Unable to build artifacts", e);
+
+			checkErrors(artifact, builtArtifacts);
+			removeBuiltArtifacts(toBuild, builtArtifacts);
+		}
+	}
+
+	private void removeBuiltArtifacts(final List<DependencyNode> toBuild, final Set<Artifact> builtArtifacts) {
+		for (Iterator<DependencyNode> iter = toBuild.iterator(); iter.hasNext();) {
+			if (builtArtifacts.contains(iter.next().getArtifact())) {
+				iter.remove();
+			}
+		}
+	}
+
+	private void checkErrors(final DependencyNode artifact, final Set<Artifact> builtArtifacts) throws MojoFailureException {
+		if (!builtArtifacts.contains(artifact.getArtifact())) {
+			throw new MojoFailureException("Aritfact " + artifact.getArtifact() + " was not built!");
+		}
+
+		if (!multiProject) {
+			List<DependencyNode> unmetDependencies = findMissingDependencies(artifact, builtArtifacts);
+			if (!unmetDependencies.isEmpty()) {
+				getLog().error("Some dependencies were not built, run again with the artifacts:");
+				for (DependencyNode node : unmetDependencies) {
+					getLog().error(" * " + node.getArtifact());
+				}
+				throw new MojoFailureException("Unable to build artifact, unmet dependencies: " + artifact.getArtifact());
+			}
 		}
 	}
 
@@ -369,6 +412,10 @@ public class BuildDependencies extends AbstractMojo {
 		}
 
 		return null;
+	}
+
+	public void setBuildStrategies(final List<BuildStrategy> buildStrategies) {
+		this.buildStrategies = buildStrategies;
 	}
 
 	/** Detects an artifact with a particular group and artifact id. */

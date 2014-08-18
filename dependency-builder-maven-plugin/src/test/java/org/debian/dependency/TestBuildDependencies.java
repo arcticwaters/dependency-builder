@@ -19,12 +19,14 @@ import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.argThat;
 import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Map.Entry;
@@ -59,6 +61,7 @@ import org.codehaus.plexus.component.configurator.ComponentConfigurator;
 import org.codehaus.plexus.component.configurator.expression.ExpressionEvaluator;
 import org.codehaus.plexus.configuration.DefaultPlexusConfiguration;
 import org.codehaus.plexus.configuration.PlexusConfiguration;
+import org.debian.dependency.builders.ArtifactBuildException;
 import org.debian.dependency.builders.BuildSession;
 import org.debian.dependency.builders.BuildStrategy;
 import org.debian.dependency.matchers.ArtifactMatcher;
@@ -66,6 +69,7 @@ import org.debian.dependency.matchers.DependencyNodeArtifactMatcher;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.mockito.InOrder;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
@@ -76,6 +80,7 @@ public class TestBuildDependencies {
 
 	private DependencyCollector collector;
 	private BuildStrategy buildStrategy;
+	private BuildStrategy buildStrategy2;
 	private ArtifactInstaller installer;
 	private RepositorySystem repositorySystem;
 	private ComponentConfigurator configurator;
@@ -118,7 +123,9 @@ public class TestBuildDependencies {
 		ExpressionEvaluator evaluator = new ResolverExpressionEvaluatorStub();
 		configurator.configureComponent(mojo, config, evaluator, mojoRule.getContainer().getContainerRealm());
 
-		return (BuildDependencies) mojo;
+		BuildDependencies buildDependenciesMojo = (BuildDependencies) mojo;
+		buildDependenciesMojo.setBuildStrategies(Arrays.asList(buildStrategy, buildStrategy2));
+		return buildDependenciesMojo;
 	}
 
 	private <T> T mockComponent(final Class<T> type) throws Exception {
@@ -135,6 +142,7 @@ public class TestBuildDependencies {
 
 		collector = mockComponent(DependencyCollector.class);
 		buildStrategy = mockComponent(BuildStrategy.class);
+		buildStrategy2 = mockComponent(BuildStrategy.class);
 		installer = mockComponent(ArtifactInstaller.class);
 		repositorySystem = mockComponent(RepositorySystem.class);
 		projectBuilder = mockComponent(ProjectBuilder.class);
@@ -472,6 +480,103 @@ public class TestBuildDependencies {
 		config.addChild(artifacts);
 
 		lookupConfiguredMojo(config).execute();
+	}
+
+	@Test(expected = MojoFailureException.class)
+	public void testArtifactNotBuilt() throws Exception {
+		DependencyNode root = createNode(null, "root", "root", "1");
+
+		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
+				.thenReturn(root);
+		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
+				.thenReturn(null);
+
+		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
+		config.addChild("artifact", "some:artifact");
+
+		lookupConfiguredMojo(config).execute();
+	}
+
+	@Test
+	public void testMultipleArtifactsMultiProject() throws Exception {
+		DependencyNode root = createNode(null, "root", "root", "1");
+		DependencyNode child = createNode(root, "child", "child", "1");
+
+		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
+				.thenReturn(root);
+		when(buildStrategy.build(argThat(new DependencyNodeArtifactMatcher(root)), any(BuildSession.class)))
+				.thenReturn(Collections.singleton(root.getArtifact()));
+		when(buildStrategy.build(argThat(new DependencyNodeArtifactMatcher(child)), any(BuildSession.class)))
+				.thenReturn(Collections.singleton(child.getArtifact()));
+
+		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
+		config.addChild("artifact", "some:artifact");
+		config.addChild("multiProject", "true");
+
+		lookupConfiguredMojo(config).execute();
+	}
+
+	@Test
+	public void testStrategy1Fails() throws Exception {
+		DependencyNode root = createNode(null, "root", "root", "1");
+
+		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
+				.thenReturn(root);
+		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
+				.thenThrow(new ArtifactBuildException());
+		when(buildStrategy2.build(any(DependencyNode.class), any(BuildSession.class)))
+				.thenReturn(Collections.singleton(root.getArtifact()));
+
+		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
+		config.addChild("artifact", "some:artifact");
+
+		lookupConfiguredMojo(config).execute();
+	}
+
+	@Test
+	public void testStrategy1DoesntBuild() throws Exception {
+		DependencyNode root = createNode(null, "root", "root", "1");
+
+		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
+				.thenReturn(root);
+		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
+				.thenReturn(null);
+		when(buildStrategy2.build(any(DependencyNode.class), any(BuildSession.class)))
+				.thenReturn(Collections.singleton(root.getArtifact()));
+
+		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
+		config.addChild("artifact", "some:artifact");
+
+		lookupConfiguredMojo(config).execute();
+	}
+
+	@Test
+	public void testHigherPriorityStrategyBuiltFirst() throws Exception {
+		DependencyNode root = createNode(null, "root", "root", "1");
+
+		final int lowPriority = 5000;
+		final int highPriority = 100;
+
+		when(buildStrategy.getPriority())
+				.thenReturn(lowPriority);
+		when(buildStrategy2.getPriority())
+				.thenReturn(highPriority);
+
+		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
+				.thenReturn(root);
+		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
+				.thenReturn(Collections.singleton(root.getArtifact()));
+		when(buildStrategy2.build(any(DependencyNode.class), any(BuildSession.class)))
+				.thenReturn(null);
+
+		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
+		config.addChild("artifact", "some:artifact");
+
+		lookupConfiguredMojo(config).execute();
+
+		InOrder order = inOrder(buildStrategy, buildStrategy2);
+		order.verify(buildStrategy2).build(any(DependencyNode.class), any(BuildSession.class));
+		order.verify(buildStrategy).build(any(DependencyNode.class), any(BuildSession.class));
 	}
 
 	private Set<Artifact> toArtifactSet(final DependencyNode... nodes) {

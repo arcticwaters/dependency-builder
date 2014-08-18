@@ -54,6 +54,7 @@ import org.twdata.maven.mojoexecutor.MojoExecutor;
  */
 @Component(role = BuildStrategy.class, hint = "scm")
 public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrategy {
+	private static final int PRIORITY = 100;
 	private static final String WORK_BRANCH = "dependency-builder-maven-plugin";
 	@Configuration(value = "org.apache.maven.plugins")
 	private String scmPluginGroupId;
@@ -261,6 +262,11 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		} catch (ProjectBuildingException e) {
 			throw new ArtifactBuildException(e);
 		}
+	}
+
+	@Override
+	public int getPriority() {
+		return PRIORITY;
 	}
 
 	/** Collects unique dependencies from a graph in a bottom up fashion, i.e. those without dependencies first. */
