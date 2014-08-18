@@ -109,6 +109,9 @@ public abstract class AbstractBuildFileSourceBuilder extends AbstractLogEnabled 
 
 		int depth = StringUtils.countMatches(poms.get(0).getCanonicalPath(), File.separator);
 		depth -= StringUtils.countMatches(directory.getCanonicalPath(), File.separator);
+		if (depth == 0 && getPriorityOffset() < 0) {
+			return 0;
+		}
 		return depth * PRIORITY_STEP + getPriorityOffset();
 	}
 }

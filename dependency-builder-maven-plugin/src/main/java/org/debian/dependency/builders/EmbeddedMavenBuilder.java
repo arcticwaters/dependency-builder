@@ -36,6 +36,7 @@ import org.apache.maven.model.building.ModelBuilder;
 import org.apache.maven.model.building.ModelBuildingException;
 import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.model.building.ModelBuildingResult;
+import org.apache.maven.project.MavenProject;
 import org.apache.maven.repository.RepositorySystem;
 import org.apache.maven.shared.invoker.DefaultInvocationRequest;
 import org.apache.maven.shared.invoker.InvocationRequest;
@@ -64,9 +65,9 @@ public class EmbeddedMavenBuilder extends AbstractBuildFileSourceBuilder impleme
 	private RepositorySystem repositorySystem;
 
 	@Override
-	public Set<Artifact> build(final Artifact artifact, final Git repository, final File localRepository) throws ArtifactBuildException {
+	public Set<Artifact> build(final MavenProject project, final Git repository, final File localRepository) throws ArtifactBuildException {
 		File basedir = repository.getRepository().getWorkTree();
-		Model model = findProjectModel(artifact, basedir);
+		Model model = findProjectModel(project, basedir);
 
 		/*
 		 * Although using the install phase will catch attached artifacts for the project, it won't handle parent poms which are
@@ -102,6 +103,8 @@ public class EmbeddedMavenBuilder extends AbstractBuildFileSourceBuilder impleme
 		try {
 			InvocationResult result = invoker.execute(request);
 			if (result.getExitCode() == 0 && result.getExecutionException() == null) {
+				Artifact artifact = project.getArtifact();
+				artifact.setFile(null); // we've already installed the artifact
 				return Collections.singleton(artifact);
 			}
 
@@ -115,8 +118,8 @@ public class EmbeddedMavenBuilder extends AbstractBuildFileSourceBuilder impleme
 		}
 	}
 
-	private Model findProjectModel(final Artifact artifact, final File basedir) throws ArtifactBuildException {
-		return findProjectModel(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion(), basedir);
+	private Model findProjectModel(final MavenProject project, final File basedir) throws ArtifactBuildException {
+		return findProjectModel(project.getGroupId(), project.getArtifactId(), project.getVersion(), basedir);
 	}
 
 	private Model findProjectModel(final String groupId, final String artifactId, final String version, final File basedir)
@@ -147,7 +150,7 @@ public class EmbeddedMavenBuilder extends AbstractBuildFileSourceBuilder impleme
 	}
 
 	@Override
-	public boolean canBuild(final Artifact artifact, final File directory) throws IOException {
+	public boolean canBuild(final MavenProject project, final File directory) throws IOException {
 		for (File pom : findBuildFiles(directory)) {
 			try {
 				ModelBuildingRequest request = new DefaultModelBuildingRequest()
@@ -158,8 +161,8 @@ public class EmbeddedMavenBuilder extends AbstractBuildFileSourceBuilder impleme
 				ModelBuildingResult result = modelBuilder.build(request);
 				Model model = result.getEffectiveModel();
 
-				if (model.getGroupId().equals(artifact.getGroupId()) && model.getArtifactId().equals(artifact.getArtifactId())
-						&& model.getVersion().equals(artifact.getVersion())) {
+				if (model.getGroupId().equals(project.getGroupId()) && model.getArtifactId().equals(project.getArtifactId())
+						&& model.getVersion().equals(project.getVersion())) {
 					return true;
 				}
 			} catch (ModelBuildingException e) {
@@ -179,5 +182,10 @@ public class EmbeddedMavenBuilder extends AbstractBuildFileSourceBuilder impleme
 		List<String> result = new ArrayList<String>(super.getExcludes());
 		result.add(POM_EXCLUDES);
 		return result;
+	}
+
+	@Override
+	protected int getPriorityOffset() {
+		return PRIORITY_STEP / 2;
 	}
 }

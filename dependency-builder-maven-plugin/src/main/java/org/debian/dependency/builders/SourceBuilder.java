@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.project.MavenProject;
 import org.eclipse.jgit.api.Git;
 
 /** Defines a means of building a particular project. */
@@ -28,29 +29,29 @@ public interface SourceBuilder {
 	int PRIORITY_STEP = 100;
 
 	/**
-	 * Builds the {@link Artifact} located under the given directory. It is not guaranteed that the artifact is in the root of the
-	 * given directory. Each returned artifact must set the artifact file appropriately: if given it is up to the caller to
+	 * Builds the {@link MavenProject} located under the given repository. It is not guaranteed that the project is in the root of
+	 * the given directory. Each returned artifact must set the artifact file appropriately: if given it is up to the caller to
 	 * install into the repository otherwise it is assumed to have been installed already.
 	 *
-	 * @param artifact artifact to build
+	 * @param project project to build
 	 * @param repository a non-bare git repository
 	 * @param localRepository repository that should be used for resolution
 	 * @return original artifact with any attached artifacts
 	 * @throws ArtifactBuildException in we are unable to build the artifact
 	 */
-	Set<Artifact> build(Artifact artifact, Git repository, File localRepository) throws ArtifactBuildException;
+	Set<Artifact> build(MavenProject project, Git repository, File localRepository) throws ArtifactBuildException;
 
 	/**
-	 * A hint to whether this builder can build an artifact from the given directory. The given artifact is not guaranteed to
-	 * exist in the directory. Since this is only meant as a hint, returning {@code false} does not mean its impossible to build
-	 * the artifact from the directory.
+	 * A hint to whether this builder can build a {@link MavenProject} from the given directory. The given project is not
+	 * guaranteed to exist in the directory. Since this is only meant as a hint, returning {@code false} does not mean its
+	 * impossible to build the artifact from the directory.
 	 *
-	 * @param artifact artifact to build
+	 * @param project project to build
 	 * @param directory directory to search
 	 * @return whether the artifact can be built from the directory
 	 * @throws IOException in case of errors
 	 */
-	boolean canBuild(Artifact artifact, File directory) throws IOException;
+	boolean canBuild(MavenProject project, File directory) throws IOException;
 
 	/**
 	 * Gets the priority of this builder for the given directory. A small number (including zero) denotes a high priority. A

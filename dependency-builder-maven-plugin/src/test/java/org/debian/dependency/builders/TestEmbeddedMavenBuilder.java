@@ -37,6 +37,8 @@ import org.apache.maven.artifact.installer.ArtifactInstaller;
 import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.plugin.testing.MojoRule;
 import org.apache.maven.plugin.testing.stubs.ArtifactStub;
+import org.apache.maven.plugin.testing.stubs.MavenProjectStub;
+import org.apache.maven.project.MavenProject;
 import org.apache.maven.shared.invoker.InvocationRequest;
 import org.apache.maven.shared.invoker.InvocationResult;
 import org.apache.maven.shared.invoker.Invoker;
@@ -82,19 +84,26 @@ public class TestEmbeddedMavenBuilder {
 		return new File(url.toURI()).getParentFile();
 	}
 
-	private Artifact createArtifact(final String groupId, final String artifactId, final String version) {
-		Artifact stub = new ArtifactStub();
+	private MavenProject createProject(final String groupId, final String artifactId, final String version) {
+		MavenProject stub = new MavenProjectStub();
 		stub.setGroupId(groupId);
 		stub.setArtifactId(artifactId);
 		stub.setVersion(version);
+
+		Artifact artifactStub = new ArtifactStub();
+		artifactStub.setGroupId(groupId);
+		artifactStub.setArtifactId(artifactId);
+		artifactStub.setVersion(version);
+		stub.setArtifact(artifactStub);
+
 		return stub;
 	}
 
 	@Test
 	public void testProjectInRoot() throws Exception {
-		Artifact artifact = createArtifact("com.example", "test", "0.0.1-SNAPSHOT");
+		MavenProject project = createProject("com.example", "test", "0.0.1-SNAPSHOT");
 		File basedir = new File(findProjectDirectory(), "simple");
-		lookupBuilder().build(artifact, Git.init().setDirectory(basedir).call(), findProjectDirectory());
+		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
 		Map<String, Object> properties = new HashMap<String, Object>();
 		properties.put("basedir", basedir);
@@ -104,9 +113,9 @@ public class TestEmbeddedMavenBuilder {
 
 	@Test
 	public void testMultiModuleSingleBuilt() throws Exception {
-		Artifact artifact = createArtifact("com.example", "test", "0.0.1-SNAPSHOT");
+		MavenProject project = createProject("com.example", "test", "0.0.1-SNAPSHOT");
 		File basedir = new File(findProjectDirectory(), "simple");
-		lookupBuilder().build(artifact, Git.init().setDirectory(basedir).call(), findProjectDirectory());
+		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
 		Map<String, Object> properties = new HashMap<String, Object>();
 		properties.put("basedir", basedir);
@@ -116,9 +125,9 @@ public class TestEmbeddedMavenBuilder {
 
 	@Test
 	public void testProjectNotInRoot() throws Exception {
-		Artifact artifact = createArtifact("com.example", "module2", "0.0.1-SNAPSHOT");
+		MavenProject project = createProject("com.example", "module2", "0.0.1-SNAPSHOT");
 		File basedir = new File(findProjectDirectory(), "multi-module");
-		lookupBuilder().build(artifact, Git.init().setDirectory(basedir).call(), findProjectDirectory());
+		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
 		Map<String, Object> properties = new HashMap<String, Object>();
 		properties.put("basedir", new File(basedir, "module2"));
@@ -129,9 +138,9 @@ public class TestEmbeddedMavenBuilder {
 
 	@Test
 	public void testFindNonRootedSingleProject() throws Exception {
-		Artifact artifact = createArtifact("com.example", "test", "0.0.1-SNAPSHOT");
+		MavenProject project = createProject("com.example", "test", "0.0.1-SNAPSHOT");
 		File basedir = new File(findProjectDirectory(), "non-rooted-simple");
-		lookupBuilder().build(artifact, Git.init().setDirectory(basedir).call(), findProjectDirectory());
+		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
 		Map<String, Object> properties = new HashMap<String, Object>();
 		properties.put("basedir", new File(basedir, "folder"));
@@ -141,9 +150,9 @@ public class TestEmbeddedMavenBuilder {
 
 	@Test
 	public void testFindNonRootedMultiModuleProject() throws Exception {
-		Artifact artifact = createArtifact("com.example", "module1", "0.0.1-SNAPSHOT");
+		MavenProject project = createProject("com.example", "module1", "0.0.1-SNAPSHOT");
 		File basedir = new File(findProjectDirectory(), "non-rooted-multi-module");
-		lookupBuilder().build(artifact, Git.init().setDirectory(basedir).call(), findProjectDirectory());
+		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
 		Map<String, Object> properties = new HashMap<String, Object>();
 		properties.put("basedir", new File(basedir, "folder/module1"));
@@ -160,9 +169,9 @@ public class TestEmbeddedMavenBuilder {
 
 	@Test
 	public void testBuildPomProject() throws Exception {
-		Artifact artifact = createArtifact("com.example", "test-parent", "0.0.1-SNAPSHOT");
+		MavenProject project = createProject("com.example", "test-parent", "0.0.1-SNAPSHOT");
 		File basedir = new File(findProjectDirectory(), "multi-module");
-		lookupBuilder().build(artifact, Git.init().setDirectory(basedir).call(), findProjectDirectory());
+		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
 		Map<String, Object> properties = new HashMap<String, Object>();
 		properties.put("basedir", basedir);
@@ -173,9 +182,9 @@ public class TestEmbeddedMavenBuilder {
 
 	@Test
 	public void testOffline() throws Exception {
-		Artifact artifact = createArtifact("com.example", "test", "0.0.1-SNAPSHOT");
+		MavenProject project = createProject("com.example", "test", "0.0.1-SNAPSHOT");
 		File basedir = new File(findProjectDirectory(), "simple");
-		lookupBuilder().build(artifact, Git.init().setDirectory(basedir).call(), findProjectDirectory());
+		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
 		Map<String, Object> properties = new HashMap<String, Object>();
 		properties.put("basedir", basedir);
@@ -186,25 +195,25 @@ public class TestEmbeddedMavenBuilder {
 
 	@Test(expected = ArtifactBuildException.class)
 	public void testArtifactNotExists() throws Exception {
-		Artifact artifact = createArtifact("artifact", "does-not-exist", "55");
+		MavenProject project = createProject("artifact", "does-not-exist", "55");
 		File basedir = new File(findProjectDirectory(), "multi-module");
-		lookupBuilder().build(artifact, Git.init().setDirectory(basedir).call(), findProjectDirectory());
+		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 	}
 
 	@Test(expected = ArtifactBuildException.class)
 	public void testExecutionThrowsException() throws Exception {
-		Artifact artifact = createArtifact("com.example", "test", "0.0.1-SNAPSHOT");
+		MavenProject project = createProject("com.example", "test", "0.0.1-SNAPSHOT");
 		File basedir = new File(findProjectDirectory(), "simple");
 
 		when(invoker.execute(any(InvocationRequest.class)))
 				.thenThrow(new MavenInvocationException("exception"));
 
-		lookupBuilder().build(artifact, Git.init().setDirectory(basedir).call(), findProjectDirectory());
+		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 	}
 
 	@Test(expected = ArtifactBuildException.class)
 	public void testExecutionCommandlineException() throws Exception {
-		Artifact artifact = createArtifact("com.example", "test", "0.0.1-SNAPSHOT");
+		MavenProject project = createProject("com.example", "test", "0.0.1-SNAPSHOT");
 		File basedir = new File(findProjectDirectory(), "simple");
 
 		InvocationResult result = mock(InvocationResult.class);
@@ -213,12 +222,12 @@ public class TestEmbeddedMavenBuilder {
 		when(result.getExecutionException())
 				.thenReturn(new CommandLineException("exception"));
 
-		lookupBuilder().build(artifact, Git.init().setDirectory(basedir).call(), findProjectDirectory());
+		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 	}
 
 	@Test(expected = ArtifactBuildException.class)
 	public void testExecutionCommandlineFailed() throws Exception {
-		Artifact artifact = createArtifact("com.example", "test", "0.0.1-SNAPSHOT");
+		MavenProject project = createProject("com.example", "test", "0.0.1-SNAPSHOT");
 		File basedir = new File(findProjectDirectory(), "simple");
 
 		InvocationResult result = mock(InvocationResult.class);
@@ -227,29 +236,29 @@ public class TestEmbeddedMavenBuilder {
 		when(result.getExitCode())
 				.thenReturn(-1);
 
-		lookupBuilder().build(artifact, Git.init().setDirectory(basedir).call(), findProjectDirectory());
+		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 	}
 
 	@Test
 	public void testCanBuild() throws Exception {
-		Artifact artifact = createArtifact("com.example", "test", "0.0.1-SNAPSHOT");
+		MavenProject project = createProject("com.example", "test", "0.0.1-SNAPSHOT");
 		File basedir = new File(findProjectDirectory(), "non-rooted-multi-module");
-		assertFalse("artifact not in directory", lookupBuilder().canBuild(artifact, basedir));
+		assertFalse("artifact not in directory", lookupBuilder().canBuild(project, basedir));
 
-		artifact = createArtifact("com.example", "test-parent", "0.0.1-SNAPSHOT");
-		assertTrue("should find artifacts outside of the root", lookupBuilder().canBuild(artifact, basedir));
+		project = createProject("com.example", "test-parent", "0.0.1-SNAPSHOT");
+		assertTrue("should find artifacts outside of the root", lookupBuilder().canBuild(project, basedir));
 
-		artifact = createArtifact("com.example", "module1", "0.0.1-SNAPSHOT");
-		assertTrue("should find modules of the main project", lookupBuilder().canBuild(artifact, basedir));
+		project = createProject("com.example", "module1", "0.0.1-SNAPSHOT");
+		assertTrue("should find modules of the main project", lookupBuilder().canBuild(project, basedir));
 	}
 
 	@Test(expected = ArtifactBuildException.class)
 	public void testUnableToInstallParent() throws Exception {
-		Artifact artifact = createArtifact("com.example", "module1", "0.0.1-SNAPSHOT");
+		MavenProject project = createProject("com.example", "module1", "0.0.1-SNAPSHOT");
 		File basedir = new File(findProjectDirectory(), "non-rooted-multi-module");
 
 		doThrow(ArtifactBuildException.class).when(artifactInstaller).install(any(File.class), any(Artifact.class),
 				any(ArtifactRepository.class));
-		lookupBuilder().build(artifact, Git.init().setDirectory(basedir).call(), findProjectDirectory());
+		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 	}
 }

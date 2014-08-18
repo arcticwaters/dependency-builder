@@ -23,6 +23,8 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
+import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.plugin.BuildPluginManager;
 import org.apache.maven.plugin.MojoExecutionException;
@@ -32,6 +34,7 @@ import org.apache.maven.project.ProjectBuilder;
 import org.apache.maven.project.ProjectBuildingException;
 import org.apache.maven.project.ProjectBuildingRequest;
 import org.apache.maven.project.ProjectBuildingResult;
+import org.apache.maven.repository.RepositorySystem;
 import org.apache.maven.shared.dependency.graph.DependencyNode;
 import org.apache.maven.shared.dependency.graph.traversal.DependencyNodeVisitor;
 import org.codehaus.plexus.component.annotations.Component;
@@ -79,21 +82,28 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 	private BuildPluginManager buildPluginManager;
 	@Requirement
 	private SourceBuilderManager sourceBuilderManager;
+	@Requirement
+	private RepositorySystem repositorySystem;
 
 	@Override
 	public Set<Artifact> build(final DependencyNode root, final BuildSession session) throws ArtifactBuildException {
 		MavenProject project = constructProject(root.getArtifact(), session);
-		project = findProjectRoot(project);
-		if (project == null) {
+
+		// ensures subtleties such as null/empty string are maintained
+		root.getArtifact().setFile(project.getArtifact().getFile());
+		project.setArtifact(root.getArtifact());
+
+		MavenProject rootProject = findProjectRoot(project);
+		if (rootProject == null) {
 			return Collections.emptySet();
 		}
 
-		File checkoutDir = new File(session.getCheckoutDirectory(), project.getId().toString());
+		File checkoutDir = new File(session.getCheckoutDirectory(), rootProject.getId().toString());
 		checkoutDir.mkdirs();
-		File workDir = new File(session.getWorkDirectory(), project.getId().toString());
+		File workDir = new File(session.getWorkDirectory(), rootProject.getId().toString());
 		workDir.mkdirs();
 
-		String scmUrl = checkoutSource(project, checkoutDir, session);
+		String scmUrl = checkoutSource(rootProject, checkoutDir, session);
 		Git git = makeLocalCopy(checkoutDir, workDir, scmUrl);
 
 		DependencyCollectingVisitor visitor = new DependencyCollectingVisitor();
@@ -106,21 +116,27 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 			if (builder == null) {
 				return Collections.emptySet();
 			}
+			getLogger().debug("Resolved build strategy " + builder + " for " + project);
 
 			final Set<Artifact> built = new HashSet<Artifact>();
 			for (Artifact artifact : visitor.artifacts) {
-				if (builder.canBuild(artifact, checkoutDir)) {
-					built.addAll(builder.build(artifact, git, session.getTargetRepository()));
+				MavenProject depProject = constructProject(artifact, session);
+
+				// ensures subtleties such as null/empty string are maintained
+				artifact.setFile(depProject.getArtifact().getFile());
+				depProject.setArtifact(artifact);
+
+				if (builder.canBuild(depProject, checkoutDir)) {
+					built.addAll(builder.build(depProject, git, session.getTargetRepository()));
 				}
 			}
 
 			// we got scm info from root dependency node, it must be built
-			built.addAll(builder.build(root.getArtifact(), git, session.getTargetRepository()));
+			built.addAll(builder.build(project, git, session.getTargetRepository()));
 			return built;
 		} catch (IOException e) {
 			throw new ArtifactBuildException(e);
 		}
-
 	}
 
 	private Git makeLocalCopy(final File checkoutDir, final File workDir, final String scmUrl) throws ArtifactBuildException {
@@ -252,16 +268,35 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 
 	private MavenProject constructProject(final Artifact artifact, final BuildSession session) throws ArtifactBuildException {
 		try {
+			// pom files are not set up in projects which are not in the workspace, we add them in manually since they are needed
+			Artifact pomArtifact = repositorySystem.createProjectArtifact(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion());
+			pomArtifact = resolveArtifact(pomArtifact, session);
+
 			ProjectBuildingRequest request = new DefaultProjectBuildingRequest(session.getMavenSession().getProjectBuildingRequest());
 			request.setActiveProfileIds(null);
 			request.setInactiveProfileIds(null);
 			request.setUserProperties(null);
 
 			ProjectBuildingResult result = projectBuilder.build(artifact, request);
-			return result.getProject();
+
+			MavenProject mavenProject = result.getProject();
+			mavenProject.setArtifact(resolveArtifact(mavenProject.getArtifact(), session));
+			mavenProject.setFile(pomArtifact.getFile());
+			return mavenProject;
 		} catch (ProjectBuildingException e) {
 			throw new ArtifactBuildException(e);
 		}
+	}
+
+	private Artifact resolveArtifact(final Artifact toResolve, final BuildSession session) {
+		ArtifactResolutionRequest request = new ArtifactResolutionRequest()
+				.setLocalRepository(session.getMavenSession().getLocalRepository())
+				.setOffline(true)
+				.setResolveRoot(true)
+				.setArtifact(toResolve);
+
+		ArtifactResolutionResult result = repositorySystem.resolve(request);
+		return result.getArtifacts().iterator().next();
 	}
 
 	@Override

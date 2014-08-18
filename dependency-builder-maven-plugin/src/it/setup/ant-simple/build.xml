@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="simple-ant" default="build">
+    <target name="build">
+        <echo>Building project</echo>
+        <jar jarfile="project.jar" basedir="src/main/resources"/>
+    </target>
+</project>
