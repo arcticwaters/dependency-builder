@@ -22,8 +22,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Enumeration;
-import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.jar.JarEntry;
@@ -48,10 +46,13 @@ import org.codehaus.plexus.util.IOUtil;
 import org.eclipse.jgit.api.AddCommand;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.LogCommand;
-import org.eclipse.jgit.api.ResetCommand.ResetType;
 import org.eclipse.jgit.api.RmCommand;
 import org.eclipse.jgit.api.errors.GitAPIException;
-import org.eclipse.jgit.diff.DiffEntry;
+import org.eclipse.jgit.diff.Edit;
+import org.eclipse.jgit.diff.EditList;
+import org.eclipse.jgit.diff.HistogramDiff;
+import org.eclipse.jgit.diff.RawText;
+import org.eclipse.jgit.diff.RawTextComparator;
 import org.eclipse.jgit.revwalk.RevCommit;
 
 /**
@@ -61,9 +62,7 @@ import org.eclipse.jgit.revwalk.RevCommit;
 public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implements SourceBuilder {
 	private static final String COMMIT_MESSAGE_PREFIX = "[build-dependency-maven-plugin]";
 	private static final String BUILD_INCLUDES = "**/build.xml";
-	/** Minimum percentage as reported by git to denote the same file. */
-	private static final int MIN_SIMILARITY = 95;
-	private static final int SIMILARITY_SAME = 100;
+	private static final float MIN_SIMILARITY = .9f;
 
 	@Requirement
 	private ArtifactInstaller installer;
@@ -74,14 +73,8 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 	public Set<Artifact> build(final MavenProject project, final Git repo, final File localRepository) throws ArtifactBuildException {
 		try {
 			ArtifactRepository targetRepository = repositorySystem.createLocalRepository(localRepository);
-
 			removeClassFiles(repo);
 			removeJarFiles(repo, project, targetRepository);
-
-			FileWatcher jarWatcher = new FileWatcher(repo.getRepository().getWorkTree(), "**/*.jar", null);
-			FileWatcher pomWatcher = new FileWatcher(repo.getRepository().getWorkTree(), "**/*.xml,**/*.pom", null);
-			jarWatcher.watch();
-			pomWatcher.watch();
 
 			List<File> buildFiles = findBuildFiles(repo.getRepository().getWorkTree());
 			Project antProject = new Project();
@@ -91,19 +84,16 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 			antProject.setBaseDir(buildFiles.get(0).getParentFile());
 			antProject.executeTarget(antProject.getDefaultTarget());
 
-			jarWatcher.watch();
-			pomWatcher.watch();
+			File builtArtifact = findArtifactFile(project, repo);
+			installer.install(builtArtifact, project.getArtifact(), targetRepository);
 
-			File builtArtifact = findArtifactFile(project, repo, jarWatcher);
-			Artifact artifact = repositorySystem.createArtifact(project.getGroupId(), project.getArtifactId(),
-					project.getVersion(), project.getPackaging());
-			installer.install(builtArtifact, artifact, targetRepository);
+			File pom = findPomFile(project, repo);
+			Artifact pomArtifact = repositorySystem.createProjectArtifact(project.getGroupId(), project.getArtifactId(),
+					project.getVersion());
+			installer.install(pom, pomArtifact, targetRepository);
 
-			File pom = findPomFile(project, repo, pomWatcher);
-			installer.install(pom, project.getArtifact(), targetRepository);
-
-			artifact.setFile(null); // we've installed the artifact
-			return Collections.singleton(artifact);
+			project.getArtifact().setFile(null); // we've installed the artifact
+			return Collections.singleton(project.getArtifact());
 		} catch (IOException e) {
 			throw new ArtifactBuildException(e);
 		} catch (InvalidRepositoryException e) {
@@ -115,34 +105,47 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 		}
 	}
 
-	private File findArtifactFile(final MavenProject project, final Git repo, final FileWatcher watcher) throws IOException, GitAPIException {
-		for (String file : watcher) {
-			File builtFile = new File(file);
-			if (jarSimilarity(repo, project.getArtifact().getFile(), builtFile) > MIN_SIMILARITY) {
-				return builtFile;
+	private File findArtifactFile(final MavenProject project, final Git repo) throws IOException, GitAPIException {
+		for (File file : FileUtils.getFiles(repo.getRepository().getWorkTree(), "**/*.jar", null)) {
+			if (jarSimilarity(repo, project.getArtifact().getFile(), file) > MIN_SIMILARITY) {
+				return file;
 			}
 		}
 		throw new IllegalStateException("Cannot find built jar file for " + project);
 	}
 
-	private File findPomFile(final MavenProject project, final Git repo, final FileWatcher watcher) throws GitAPIException, IOException {
-		for (String file : watcher) {
-			repo.add().addFilepattern(file).call();
-			try {
-				// copying files is not ideal here, but allows leverage of the git diff engine
-				File pomFile = new File(file);
-				FileUtils.copyFile(project.getFile(), pomFile);
-				List<DiffEntry> diff = repo.diff().setCached(true).call();
+	private File findPomFile(final MavenProject project, final Git repo) throws IOException {
+		for (File file : FileUtils.getFiles(repo.getRepository().getWorkTree(), "**/*.xml,**/*.pom", null)) {
+			RawText originalText = new RawText(project.getFile());
+			RawText repoText = new RawText(file);
 
-				if (diff.isEmpty() || diff.get(0).getScore() > MIN_SIMILARITY) {
-					return pomFile;
-				}
-			} finally {
-				repo.checkout().addPath(file).call();
-				repo.reset().addPath(file).setMode(ResetType.SOFT).call();
+			if (calculateSimilarity(originalText, repoText) > MIN_SIMILARITY) {
+				return file;
 			}
 		}
 		throw new IllegalStateException("Cannot find built pom file for " + project);
+	}
+
+	private float calculateSimilarity(final RawText text1, final RawText text2) {
+		long fullSize = Math.max(text1.size(), text2.size());
+		long diffSize = 0;
+
+		EditList diffList = new EditList();
+		diffList.addAll(new HistogramDiff().diff(RawTextComparator.DEFAULT, text1, text2));
+
+		for (Edit edit : diffList) {
+			diffSize += Math.max(edit.getLengthB(), edit.getLengthA());
+		}
+
+		return ((float) fullSize - diffSize) / fullSize;
+	}
+
+	private String repositoryRelative(final Git repo, final String file) {
+		return repositoryRelative(repo, new File(file));
+	}
+
+	private String repositoryRelative(final Git repo, final File file) {
+		return repo.getRepository().getWorkTree().toURI().relativize(file.toURI()).getPath();
 	}
 
 	private List<String> findFilesToProcess(final Git repo, final String includes, final String excludes) throws IOException,
@@ -155,7 +158,7 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 		// check to see if we've done this before
 		LogCommand logCommand = repo.log();
 		for (String processFile : processFiles) {
-			logCommand.addPath(processFile);
+			logCommand.addPath(repositoryRelative(repo, processFile));
 		}
 
 		for (RevCommit commit : logCommand.call()) {
@@ -177,16 +180,15 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 		List<String> jarsToRemove = new ArrayList<String>();
 		AddCommand addCommand = repo.add();
 		for (String jarFile : jarFiles) {
+			jarFile = repositoryRelative(repo, jarFile);
+
 			boolean foundDependency = false;
 			for (Dependency dep : project.getDependencies()) {
 				Artifact depArtifact = repositorySystem.createArtifact(dep.getGroupId(), dep.getArtifactId(), dep.getVersion(),
 						Artifact.SCOPE_RUNTIME, "jar");
 				resolveArtifact(depArtifact, artifactRepository);
 
-				File jarFileFile = new File(jarFile);
-				if (jarSimilarity(repo, jarFileFile, depArtifact.getFile()) > MIN_SIMILARITY) {
-					FileUtils.copyFile(depArtifact.getFile(), jarFileFile);
-					addCommand.addFilepattern(jarFile);
+				if (jarSimilarity(repo, project.getArtifact().getFile(), depArtifact.getFile()) > MIN_SIMILARITY) {
 					foundDependency = true;
 					break;
 				}
@@ -221,27 +223,33 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 			.call();
 	}
 
-	private int jarSimilarity(final Git repo, final File jarFile1, final File jarFile2) throws IOException, GitAPIException {
-		File fileList1 = createFileList(repo, jarFile1);
-		File fileList2 = createFileList(repo, jarFile2);
-
-		String relative1 = repo.getRepository().getWorkTree().toURI().relativize(fileList1.toURI()).getPath();
-		repo.add().addFilepattern(relative1).call();
+	/*
+	 * Differences of jar files are calculated via file lists. This should be more accurate with a
+	 * high number of files. If also has the advantage of not hiccuping on differences in compilers, but
+	 * can be easily fooled.
+	 */
+	private float jarSimilarity(final Git repo, final File jarFile1, final File jarFile2) throws IOException {
+		File fileList1 = null;
+		File fileList2 = null;
 		try {
-			FileUtils.copyFile(fileList2, fileList1);
-			List<DiffEntry> diff = repo.diff().setCached(true).call();
+			fileList1 = createFileList(repo, jarFile1);
+			fileList2 = createFileList(repo, jarFile2);
 
-			if (diff.isEmpty()) {
-				return SIMILARITY_SAME;
-			}
-			return diff.get(0).getScore();
+			RawText text1 = new RawText(fileList1);
+			RawText text2 = new RawText(fileList2);
+			return calculateSimilarity(text1, text2);
 		} finally {
-			repo.rm().addFilepattern(relative1).call();
+			if (fileList1 != null) {
+				FileUtils.forceDelete(fileList1);
+			}
+			if (fileList2 != null) {
+				FileUtils.forceDelete(fileList2);
+			}
 		}
 	}
 
 	private File createFileList(final Git repo, final File file) throws IOException {
-		File fileList = FileUtils.createTempFile("filelist", "txt", repo.getRepository().getWorkTree());
+		File fileList = FileUtils.createTempFile("filelist", ".txt", repo.getRepository().getWorkTree());
 		PrintWriter writer = null;
 		JarFile jarFile = null;
 		try {
@@ -310,74 +318,5 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 	@Override
 	protected List<String> getIncludes() {
 		return Arrays.asList(BUILD_INCLUDES);
-	}
-
-	/** A way to keep track of new files without relying on file system timestamps. */
-	private static class FileWatcher implements Iterable<String> {
-		private Set<String> previousFiles = new HashSet<String>();
-		private Set<String> files = new HashSet<String>();
-		private final File basedir;
-		private final String includes;
-		private final String excludes;
-
-		public FileWatcher(final File basedir, final String includes, final String excludes) {
-			this.basedir = basedir;
-			this.includes = includes;
-			this.excludes = excludes;
-		}
-
-		public void watch() throws IOException {
-			previousFiles = files;
-			files = new HashSet<String>(FileUtils.getFileNames(basedir, includes, excludes, true));
-		}
-
-		public Set<String> getChanges() {
-			Set<String> result = new HashSet<String>(files);
-			result.removeAll(previousFiles);
-			return result;
-		}
-
-		@Override
-		public Iterator<String> iterator() {
-			return new ChainedIterator<String>(getChanges().iterator(), files.iterator());
-		}
-	}
-
-	private static class ChainedIterator<T> implements Iterator<T> {
-		private final List<Iterator<T>> iters = new ArrayList<Iterator<T>>();
-		private Iterator<T> current;
-
-		public ChainedIterator(final Iterator<T> first, final Iterator<T> second) {
-			this.current = first;
-			iters.add(second);
-		}
-
-		@Override
-		public boolean hasNext() {
-			if (current.hasNext()) {
-				return true;
-			}
-
-			while (!current.hasNext() && !iters.isEmpty()) {
-				current = iters.get(0);
-				iters.remove(0);
-				if (current.hasNext()) {
-					return true;
-				}
-			}
-
-			return false;
-		}
-
-		@Override
-		public T next() {
-			hasNext(); // this will handle moving iterators up
-			return current.next();
-		}
-
-		@Override
-		public void remove() {
-			current.remove();
-		}
 	}
 }
