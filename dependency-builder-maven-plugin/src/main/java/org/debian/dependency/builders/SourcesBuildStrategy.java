@@ -40,10 +40,9 @@ import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.logging.AbstractLogEnabled;
 import org.codehaus.plexus.util.FileUtils;
 import org.codehaus.plexus.util.IOUtil;
-import org.eclipse.jgit.api.CheckoutCommand;
+import org.eclipse.jgit.api.AddCommand;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;
-import org.eclipse.jgit.lib.Ref;
 
 /**
  * An attempt to build artifacts using an attached sources artifact.
@@ -51,6 +50,7 @@ import org.eclipse.jgit.lib.Ref;
 @Component(role = BuildStrategy.class, hint = "sources")
 public class SourcesBuildStrategy extends AbstractLogEnabled implements BuildStrategy {
 	private static final String WORK_BRANCH = "dependency-builder-maven-plugin";
+	private static final String COMMIT_MESSAGE_PREFIX = "[build-dependency-maven-plugin]";
 	private static final int PRIORITY = 5000;
 	@Requirement
 	private RepositorySystem repoSystem;
@@ -66,11 +66,13 @@ public class SourcesBuildStrategy extends AbstractLogEnabled implements BuildStr
 				artifact.getVersion(), artifact.getType(), "sources");
 		sourcesArtifact = resolveArtifact(sourcesArtifact, session);
 
-		if (sourcesArtifact.getFile() == null || !sourcesArtifact.getFile().exists()) {
+		if (sourcesArtifact == null || sourcesArtifact.getFile() == null || !sourcesArtifact.getFile().exists()) {
 			return Collections.emptySet();
 		}
 
-		File workDir = new File(session.getWorkDirectory(), graph.getArtifact().getId().toString());
+		// some build systems may not work well with colon in their name (and ntfs just can't handle it)
+		String projectId = graph.getArtifact().getId().replace(':', '%');
+		File workDir = new File(session.getWorkDirectory(), projectId);
 		workDir.mkdirs();
 
 		try {
@@ -126,6 +128,9 @@ public class SourcesBuildStrategy extends AbstractLogEnabled implements BuildStr
 				}
 			}
 
+			Git repo = Git.init().setDirectory(workDir).call();
+			AddCommand addCommand = repo.add();
+
 			for (Enumeration<JarEntry> iter = jarFile.entries(); iter.hasMoreElements();) {
 				JarEntry entry = iter.nextElement();
 				File file = new File(new File(workDir, "src/main/java/"), entry.getName());
@@ -134,24 +139,39 @@ public class SourcesBuildStrategy extends AbstractLogEnabled implements BuildStr
 					try {
 						outputStream = new FileOutputStream(file);
 						IOUtil.copy(jarFile.getInputStream(entry), outputStream);
+						addCommand.addFilepattern(repositoryRelative(repo, file));
 					} finally {
 						IOUtil.close(outputStream);
 					}
 				}
 			}
 
+
 			Artifact pomArtifact = repoSystem.createProjectArtifact(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion());
 			pomArtifact = resolveArtifact(pomArtifact, session);
 			FileUtils.copyFile(pomArtifact.getFile(), new File(workDir, "pom.xml"));
+			addCommand.addFilepattern("pom.xml");
 
-			Git git = Git.init().setDirectory(workDir).call();
-			ensureOnCorrectBranch(git);
-			return git;
+			addCommand.call();
+			repo.commit()
+				.setMessage(COMMIT_MESSAGE_PREFIX + " initial import from sources artifact of " + artifact)
+				.call();
+
+			repo.checkout()
+				.setCreateBranch(true)
+				.setName(WORK_BRANCH)
+				.call();
+
+			return repo;
 		} finally {
 			if (jarFile != null) {
 				jarFile.close();
 			}
 		}
+	}
+
+	private String repositoryRelative(final Git repo, final File file) {
+		return repo.getRepository().getWorkTree().toURI().relativize(file.toURI()).getPath();
 	}
 
 	private Artifact resolveArtifact(final Artifact toResolve, final BuildSession session) {
@@ -162,28 +182,10 @@ public class SourcesBuildStrategy extends AbstractLogEnabled implements BuildStr
 				.setArtifact(toResolve);
 
 		ArtifactResolutionResult result = repoSystem.resolve(request);
+		if (result.getArtifacts().isEmpty()) {
+			return null;
+		}
 		return result.getArtifacts().iterator().next();
-	}
-
-	private void ensureOnCorrectBranch(final Git git) throws GitAPIException {
-		String workBranchRefName = "refs/heads/" + WORK_BRANCH;
-
-		// make sure that we are on the right branch, again assume its setup correctly if there
-		Ref branchRef = null;
-		for (Ref ref : git.branchList().call()) {
-			if (workBranchRefName.equals(ref.getName())) {
-				branchRef = ref;
-				break;
-			}
-		}
-
-		CheckoutCommand command = git.checkout().setName(WORK_BRANCH);
-		if (branchRef == null) {
-			command.setCreateBranch(true);
-		}
-		command.call();
-
-		git.clean().setCleanDirectories(true).call();
 	}
 
 	@Override
