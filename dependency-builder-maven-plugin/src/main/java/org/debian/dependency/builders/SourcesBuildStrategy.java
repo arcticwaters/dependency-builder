@@ -118,7 +118,7 @@ public class SourcesBuildStrategy extends AbstractLogEnabled implements BuildStr
 		JarFile jarFile = null;
 		try {
 			jarFile = new JarFile(artifact.getFile());
-			for (Enumeration<JarEntry> iter = jarFile.entries(); iter.hasMoreElements(); ) {
+			for (Enumeration<JarEntry> iter = jarFile.entries(); iter.hasMoreElements();) {
 				JarEntry entry = iter.nextElement();
 				if (entry.getName().endsWith("/")) {
 					File file = new File(new File(workDir, "src/main/java/"), entry.getName());
@@ -126,7 +126,7 @@ public class SourcesBuildStrategy extends AbstractLogEnabled implements BuildStr
 				}
 			}
 
-			for (Enumeration<JarEntry> iter = jarFile.entries(); iter.hasMoreElements(); ) {
+			for (Enumeration<JarEntry> iter = jarFile.entries(); iter.hasMoreElements();) {
 				JarEntry entry = iter.nextElement();
 				File file = new File(new File(workDir, "src/main/java/"), entry.getName());
 				if (!entry.getName().endsWith("/")) {
