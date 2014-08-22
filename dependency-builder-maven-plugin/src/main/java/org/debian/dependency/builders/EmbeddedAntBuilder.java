@@ -47,6 +47,7 @@ import org.eclipse.jgit.api.AddCommand;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.LogCommand;
 import org.eclipse.jgit.api.RmCommand;
+import org.eclipse.jgit.api.Status;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.diff.Edit;
 import org.eclipse.jgit.diff.EditList;
@@ -116,28 +117,27 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 
 	private File findPomFile(final MavenProject project, final Git repo) throws IOException {
 		for (File file : FileUtils.getFiles(repo.getRepository().getWorkTree(), "**/*.xml,**/*.pom", null)) {
-			RawText originalText = new RawText(project.getFile());
-			RawText repoText = new RawText(file);
-
-			if (calculateSimilarity(originalText, repoText) > MIN_SIMILARITY) {
+			if (calculateSimilarity(project.getFile(), file) > MIN_SIMILARITY) {
 				return file;
 			}
 		}
 		throw new IllegalStateException("Cannot find built pom file for " + project);
 	}
 
-	private float calculateSimilarity(final RawText text1, final RawText text2) {
-		long fullSize = Math.max(text1.size(), text2.size());
-		long diffSize = 0;
+	private float calculateSimilarity(final File text1, final File text2) throws IOException {
+		RawText rawText1 = new RawText(text1);
+		RawText rawText2 = new RawText(text2);
+		long fullSize = Math.max(rawText1.size(), rawText2.size());
 
 		EditList diffList = new EditList();
-		diffList.addAll(new HistogramDiff().diff(RawTextComparator.DEFAULT, text1, text2));
+		diffList.addAll(new HistogramDiff().diff(RawTextComparator.WS_IGNORE_ALL, rawText1, rawText2));
 
+		long diffSize = 0;
 		for (Edit edit : diffList) {
 			diffSize += Math.max(edit.getLengthB(), edit.getLengthA());
 		}
 
-		return ((float) fullSize - diffSize) / fullSize;
+		return Math.max(fullSize - diffSize, 0f) / fullSize;
 	}
 
 	private String repositoryRelative(final Git repo, final String file) {
@@ -148,8 +148,8 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 		return repo.getRepository().getWorkTree().toURI().relativize(file.toURI()).getPath();
 	}
 
-	private List<String> findFilesToProcess(final Git repo, final String includes, final String excludes) throws IOException,
-			GitAPIException {
+	private List<String> findFilesToProcess(final Git repo, final String includes, final String excludes, final List<String> logMessages)
+			throws IOException, GitAPIException {
 		List<String> processFiles = FileUtils.getFileNames(repo.getRepository().getWorkTree(), includes, excludes, true);
 		if (processFiles.isEmpty()) {
 			return processFiles;
@@ -162,7 +162,7 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 		}
 
 		for (RevCommit commit : logCommand.call()) {
-			if (commit.getShortMessage().startsWith(COMMIT_MESSAGE_PREFIX)) {
+			if (logMessages.contains(commit.getShortMessage())) {
 				return Collections.emptyList();
 			}
 		}
@@ -172,39 +172,47 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 
 	private void removeJarFiles(final Git repo, final MavenProject project, final ArtifactRepository artifactRepository) throws IOException,
 			GitAPIException {
-		List<String> jarFiles = findFilesToProcess(repo, "*.jar", null);
+		String replaceJarMessage = COMMIT_MESSAGE_PREFIX + " replacing jar files with open source ones";
+		String removeJarMessage = COMMIT_MESSAGE_PREFIX + " removing unknown jar files";
+
+		List<String> jarFiles = findFilesToProcess(repo, "**/*.jar", null, Arrays.asList(replaceJarMessage, removeJarMessage));
 		if (jarFiles.isEmpty()) {
 			return;
 		}
 
 		List<String> jarsToRemove = new ArrayList<String>();
 		AddCommand addCommand = repo.add();
-		for (String jarFile : jarFiles) {
-			jarFile = repositoryRelative(repo, jarFile);
+		for (String relativeJar : jarFiles) {
+			File jarFile = new File(relativeJar);
+			relativeJar = repositoryRelative(repo, relativeJar);
 
 			boolean foundDependency = false;
 			for (Dependency dep : project.getDependencies()) {
-				Artifact depArtifact = repositorySystem.createArtifact(dep.getGroupId(), dep.getArtifactId(), dep.getVersion(),
-						Artifact.SCOPE_RUNTIME, "jar");
+				Artifact depArtifact = repositorySystem.createDependencyArtifact(dep);
 				resolveArtifact(depArtifact, artifactRepository);
 
-				if (jarSimilarity(repo, project.getArtifact().getFile(), depArtifact.getFile()) > MIN_SIMILARITY) {
+				if (jarSimilarity(repo, jarFile, depArtifact.getFile()) > MIN_SIMILARITY) {
+					FileUtils.copyFile(depArtifact.getFile(), jarFile);
+					addCommand.addFilepattern(relativeJar);
 					foundDependency = true;
 					break;
 				}
 			}
 
 			if (!foundDependency) {
-				jarsToRemove.add(jarFile);
+				jarsToRemove.add(relativeJar);
 			}
 		}
 
 		if (jarsToRemove.size() < jarFiles.size()) {
 			addCommand.call();
 
-			repo.commit()
-				.setMessage(COMMIT_MESSAGE_PREFIX + " replacing jar files with open source ones")
+			Status status = repo.status().call();
+			if (!status.getChanged().isEmpty()) {
+				repo.commit()
+				.setMessage(replaceJarMessage)
 				.call();
+			}
 		}
 
 		if (jarsToRemove.isEmpty()) {
@@ -219,14 +227,14 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 		rmCommand.call();
 
 		repo.commit()
-			.setMessage(COMMIT_MESSAGE_PREFIX + " removing unknown jar files")
+			.setMessage(removeJarMessage)
 			.call();
 	}
 
 	/*
-	 * Differences of jar files are calculated via file lists. This should be more accurate with a
-	 * high number of files. If also has the advantage of not hiccuping on differences in compilers, but
-	 * can be easily fooled.
+	 * Differences of jar files are calculated via file lists. In general, this should be accurate with
+	 * a high number of files and has the advantage of not hiccupping on differences in compilers. Since
+	 * it doesn't actually diff contents, it can be easily fooled.
 	 */
 	private float jarSimilarity(final Git repo, final File jarFile1, final File jarFile2) throws IOException {
 		File fileList1 = null;
@@ -234,10 +242,7 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 		try {
 			fileList1 = createFileList(repo, jarFile1);
 			fileList2 = createFileList(repo, jarFile2);
-
-			RawText text1 = new RawText(fileList1);
-			RawText text2 = new RawText(fileList2);
-			return calculateSimilarity(text1, text2);
+			return calculateSimilarity(fileList1, fileList2);
 		} finally {
 			if (fileList1 != null) {
 				FileUtils.forceDelete(fileList1);
@@ -292,7 +297,8 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 	}
 
 	private void removeClassFiles(final Git repo) throws IOException, GitAPIException {
-		List<String> clazzFiles = findFilesToProcess(repo, "*.class", null);
+		String message = COMMIT_MESSAGE_PREFIX + " removing class files";
+		List<String> clazzFiles = findFilesToProcess(repo, "*.class", null, Collections.singletonList(message));
 		if (clazzFiles.isEmpty()) {
 			return;
 		}
@@ -305,7 +311,7 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 		rmCommand.call();
 
 		repo.commit()
-			.setMessage(COMMIT_MESSAGE_PREFIX + " removing class files")
+			.setMessage(message)
 			.call();
 	}
 

@@ -98,9 +98,11 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 			return Collections.emptySet();
 		}
 
-		File checkoutDir = new File(session.getCheckoutDirectory(), rootProject.getId().toString());
+		// some build systems may not work well with colon in their name (and ntfs just can't handle it)
+		String projectId = rootProject.getId().replace(':', '%');
+		File checkoutDir = new File(session.getCheckoutDirectory(), projectId);
 		checkoutDir.mkdirs();
-		File workDir = new File(session.getWorkDirectory(), rootProject.getId().toString());
+		File workDir = new File(session.getWorkDirectory(), projectId);
 		workDir.mkdirs();
 
 		String scmUrl = checkoutSource(rootProject, checkoutDir, session);

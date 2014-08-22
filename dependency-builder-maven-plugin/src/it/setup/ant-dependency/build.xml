@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="simple-ant" default="build">
+	<property environment="env" />
+
+	<target name="build">
+		<echo>Building project</echo>
+		<mkdir dir="target/classes" />
+		<javac fork="true" executable="${env.JAVA_HOME}/bin/javac" srcdir="src/main/java" destdir="target/classes" includeantruntime="false">
+			<classpath>
+				<pathelement location="jars/junit.jar" />
+			</classpath>
+		</javac>
+		<jar jarfile="project.jar" basedir="target/classes" />
+	</target>
+</project>
