@@ -146,21 +146,27 @@ public class SourcesBuildStrategy extends AbstractLogEnabled implements BuildStr
 				}
 			}
 
-
 			Artifact pomArtifact = repoSystem.createProjectArtifact(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion());
 			pomArtifact = resolveArtifact(pomArtifact, session);
 			FileUtils.copyFile(pomArtifact.getFile(), new File(workDir, "pom.xml"));
 			addCommand.addFilepattern("pom.xml");
 
 			addCommand.call();
-			repo.commit()
-				.setMessage(COMMIT_MESSAGE_PREFIX + " initial import from sources artifact of " + artifact)
-				.call();
 
-			repo.checkout()
-				.setCreateBranch(true)
-				.setName(WORK_BRANCH)
-				.call();
+			if (!repo.diff().setCached(true).call().isEmpty()) {
+				repo.commit()
+						.setMessage(COMMIT_MESSAGE_PREFIX + " initial import from sources artifact of " + artifact)
+						.call();
+
+				repo.branchCreate()
+						.setName(WORK_BRANCH)
+						.setForce(true)
+						.call();
+
+				repo.checkout()
+						.setName(WORK_BRANCH)
+						.call();
+			}
 
 			return repo;
 		} finally {
