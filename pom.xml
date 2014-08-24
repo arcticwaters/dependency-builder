@@ -41,6 +41,8 @@
 
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<checkstyle.goal>check</checkstyle.goal>
+		<pmd.goal>check</pmd.goal>
 	</properties>
 
 	<build>
@@ -87,14 +89,16 @@
 				<executions>
 					<execution>
 						<goals>
-							<goal>check</goal>
+							<goal>${checkstyle.goal}</goal>
 						</goals>
+						<phase>verify</phase>
 					</execution>
 					<execution>
 						<id>tests</id>
 						<goals>
-							<goal>check</goal>
+							<goal>${checkstyle.goal}</goal>
 						</goals>
+						<phase>verify</phase>
 						<configuration>
 							<configLocation>config/checkstyle-tests.xml</configLocation>
 							<sourceDirectory>${project.build.testSourceDirectory}</sourceDirectory>
@@ -124,8 +128,9 @@
 				<executions>
 					<execution>
 						<goals>
-							<goal>check</goal>
+							<goal>${pmd.goal}</goal>
 						</goals>
+						<phase>verify</phase>
 					</execution>
 				</executions>
 				<dependencies>
