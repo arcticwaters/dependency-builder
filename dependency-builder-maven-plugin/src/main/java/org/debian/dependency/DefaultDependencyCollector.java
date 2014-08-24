@@ -128,7 +128,9 @@ public class DefaultDependencyCollector extends AbstractLogEnabled implements De
 
 				AndArtifactFilter depFilter = new AndArtifactFilter();
 				depFilter.add(new ExcludesArtifactFilter(exclusions));
-				depFilter.add(filter);
+				if (filter != null) {
+					depFilter.add(filter);
+				}
 
 				DependencyNode dependencies = dependencyGraphBuilder.buildDependencyGraph(depProject, depFilter);
 				dependencies.accept(visitor);
