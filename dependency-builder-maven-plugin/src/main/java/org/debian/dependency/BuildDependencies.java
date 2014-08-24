@@ -237,7 +237,7 @@ public class BuildDependencies extends AbstractMojo {
 				try {
 					result.add(resolveDependencies(artifact));
 				} catch (DependencyResolutionException e) {
-					throw new MojoExecutionException("Unable to resolve dependencies for " + artifact, e);
+					getLog().warn("Unable to resolve dependencies for " + artifact, e);
 				}
 			}
 		}
