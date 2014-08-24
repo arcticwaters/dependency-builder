@@ -298,6 +298,14 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 				.setArtifact(toResolve);
 
 		ArtifactResolutionResult result = repositorySystem.resolve(request);
+
+		/*
+		 * Projects with custom packaging may not resolve completely, but they appear to set the file of the artifact accurately.
+		 * This is really all we're interested in.
+		 */
+		if (toResolve.getFile() != null) {
+			return toResolve;
+		}
 		return result.getArtifacts().iterator().next();
 	}
 
