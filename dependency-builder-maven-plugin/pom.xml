@@ -50,6 +50,19 @@
 				<version>1.8</version>
 				<executions>
 					<execution>
+						<id>setup-dependencies</id>
+						<goals>
+							<goal>run</goal>
+						</goals>
+						<configuration>
+							<setupIncludes combine.self="override"/>
+							<pomIncludes>
+								<pomInclude>setup/simple/pom.xml</pomInclude>
+							</pomIncludes>
+						</configuration>
+					</execution>
+					<execution>
+						<id>default</id>
 						<goals>
 							<goal>install</goal>
 							<goal>run</goal>
