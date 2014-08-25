@@ -28,8 +28,6 @@ import static org.mockito.Mockito.when;
 import java.io.File;
 import java.net.URISyntaxException;
 import java.net.URL;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Map.Entry;
 
 import org.apache.maven.artifact.Artifact;
@@ -105,10 +103,7 @@ public class TestEmbeddedMavenBuilder {
 		File basedir = new File(findProjectDirectory(), "simple");
 		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
-		Map<String, Object> properties = new HashMap<String, Object>();
-		properties.put("basedir", basedir);
-
-		verify(invoker).execute(argThat(new ObjectPropertyMatcher<InvocationRequest>(properties)));
+		verify(invoker).execute(argThat(new ObjectPropertyMatcher<InvocationRequest>("basedir", basedir )));
 	}
 
 	@Test
@@ -117,10 +112,7 @@ public class TestEmbeddedMavenBuilder {
 		File basedir = new File(findProjectDirectory(), "simple");
 		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
-		Map<String, Object> properties = new HashMap<String, Object>();
-		properties.put("basedir", basedir);
-
-		verify(invoker).execute(argThat(new ObjectPropertyMatcher<InvocationRequest>(properties)));
+		verify(invoker).execute(argThat(new ObjectPropertyMatcher<InvocationRequest>("basedir", basedir)));
 	}
 
 	@Test
@@ -129,11 +121,8 @@ public class TestEmbeddedMavenBuilder {
 		File basedir = new File(findProjectDirectory(), "multi-module");
 		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
-		Map<String, Object> properties = new HashMap<String, Object>();
-		properties.put("basedir", new File(basedir, "module2"));
-
 		// even though there are inter-project dependencies, they should not be built unless requested
-		verify(invoker).execute(argThat(new ObjectPropertyMatcher<InvocationRequest>(properties)));
+		verify(invoker).execute(argThat(new ObjectPropertyMatcher<InvocationRequest>("basedir", new File(basedir, "module2"))));
 	}
 
 	@Test
@@ -142,10 +131,7 @@ public class TestEmbeddedMavenBuilder {
 		File basedir = new File(findProjectDirectory(), "non-rooted-simple");
 		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
-		Map<String, Object> properties = new HashMap<String, Object>();
-		properties.put("basedir", new File(basedir, "folder"));
-
-		verify(invoker).execute(argThat(new ObjectPropertyMatcher<InvocationRequest>(properties)));
+		verify(invoker).execute(argThat(new ObjectPropertyMatcher<InvocationRequest>("basedir", new File(basedir, "folder"))));
 	}
 
 	@Test
@@ -154,17 +140,14 @@ public class TestEmbeddedMavenBuilder {
 		File basedir = new File(findProjectDirectory(), "non-rooted-multi-module");
 		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
-		Map<String, Object> properties = new HashMap<String, Object>();
-		properties.put("basedir", new File(basedir, "folder/module1"));
+		ObjectPropertyMatcher<Artifact> parent = new ObjectPropertyMatcher<Artifact>();
+		parent.addMatcher("groupId", "com.example");
+		parent.addMatcher("artifactId", "test-parent");
+		parent.addMatcher("version", "0.0.1-SNAPSHOT");
 
-		Map<String, Object> parentProperties = new HashMap<String, Object>();
-		parentProperties.put("groupId", "com.example");
-		parentProperties.put("artifactId", "test-parent");
-		parentProperties.put("version", "0.0.1-SNAPSHOT");
-
-		verify(invoker).execute(argThat(new ObjectPropertyMatcher<InvocationRequest>(properties)));
+		verify(invoker).execute(argThat(new ObjectPropertyMatcher<InvocationRequest>("basedir", new File(basedir, "folder/module1"))));
 		verify(artifactInstaller).install(eq(new File(basedir, "folder/pom.xml")),
-				argThat(new ObjectPropertyMatcher<Artifact>(parentProperties)), any(ArtifactRepository.class));
+				argThat(parent), any(ArtifactRepository.class));
 	}
 
 	@Test
@@ -173,11 +156,11 @@ public class TestEmbeddedMavenBuilder {
 		File basedir = new File(findProjectDirectory(), "multi-module");
 		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
-		Map<String, Object> properties = new HashMap<String, Object>();
-		properties.put("basedir", basedir);
-		properties.put("recursive", false);
+		ObjectPropertyMatcher<InvocationRequest> invocationMatcher = new ObjectPropertyMatcher<InvocationRequest>();
+		invocationMatcher.addMatcher("basedir", basedir);
+		invocationMatcher.addMatcher("recursive", false);
 
-		verify(invoker).execute(argThat(new ObjectPropertyMatcher<InvocationRequest>(properties)));
+		verify(invoker).execute(argThat(invocationMatcher));
 	}
 
 	@Test
@@ -186,11 +169,11 @@ public class TestEmbeddedMavenBuilder {
 		File basedir = new File(findProjectDirectory(), "simple");
 		lookupBuilder().build(project, Git.init().setDirectory(basedir).call(), findProjectDirectory());
 
-		Map<String, Object> properties = new HashMap<String, Object>();
-		properties.put("basedir", basedir);
-		properties.put("offline", true);
+		ObjectPropertyMatcher<InvocationRequest> invocationMatcher = new ObjectPropertyMatcher<InvocationRequest>();
+		invocationMatcher.addMatcher("basedir", basedir);
+		invocationMatcher.addMatcher("offline", true);
 
-		verify(invoker).execute(argThat(new ObjectPropertyMatcher<InvocationRequest>(properties)));
+		verify(invoker).execute(argThat(invocationMatcher));
 	}
 
 	@Test(expected = ArtifactBuildException.class)

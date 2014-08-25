@@ -16,7 +16,9 @@
 package org.debian.dependency.builders;
 
 import java.io.File;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.Dependency;
@@ -26,7 +28,8 @@ import org.apache.maven.model.Dependency;
  */
 public class BuildSession {
 	private final MavenSession session;
-	private List<Dependency> extensions;
+	private List<Dependency> extensions = Collections.emptyList();
+	private Map<String, String> artifactScmOverrides = Collections.emptyMap();
 	private File checkoutDirectory;
 	private File workDirectory;
 	private File targetRepository;
@@ -54,6 +57,22 @@ public class BuildSession {
 	 */
 	public List<Dependency> getExtensions() {
 		return extensions;
+	}
+
+	/**
+	 * @return scm connection strings to use as overrides for specific projects
+	 */
+	public Map<String, String> getArtifactScmOverrides() {
+		return artifactScmOverrides;
+	}
+
+	/**
+	 * Sets scm connection strings to use as overrides for specific projects.
+	 *
+	 * @param artifactScmOverrides artifact to scm connection string map
+	 */
+	public void setArtifactScmOverrides(Map<String, String> artifactScmOverrides) {
+		this.artifactScmOverrides = artifactScmOverrides;
 	}
 
 	/**

@@ -20,9 +20,14 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Properties;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -113,6 +118,12 @@ public class BuildDependencies extends AbstractMojo {
 	/** Whether to allow more than a single project to be built. */
 	@Parameter
 	private boolean multiProject;
+	/**
+	 * Overrides for scm urls for specific projects. Keys should be in the format <code>&lt;groupId&gt;:&lt;artifactId&gt;:&lt;version&gt;</code>
+	 * while values are scm connection strings, i.e. {@code scm:git:git://localhost/repository.git}.
+	 */
+	@Parameter
+	private Properties artifactScmOverrides = new Properties();
 
 	@Parameter(defaultValue = "${session}")
 	private MavenSession session;
@@ -140,6 +151,8 @@ public class BuildDependencies extends AbstractMojo {
 		}
 
 		setupDefaultIgnores();
+		validationConfiguration();
+
 		buildStrategies = new ArrayList<BuildStrategy>(buildStrategies);
 		Collections.sort(buildStrategies, new Comparator<BuildStrategy>() {
 			@Override
@@ -158,6 +171,7 @@ public class BuildDependencies extends AbstractMojo {
 		buildSession.setCheckoutDirectory(checkoutDirectory);
 		buildSession.setWorkDirectory(workDirectory);
 		buildSession.setTargetRepository(outputDirectory);
+		buildSession.setArtifactScmOverrides(propertiesToMap(artifactScmOverrides));
 
 		while (!toBuild.isEmpty()) {
 			DependencyNode artifact = toBuild.get(0);
@@ -179,6 +193,28 @@ public class BuildDependencies extends AbstractMojo {
 
 			checkErrors(artifact, builtArtifacts);
 			removeBuiltArtifacts(toBuild, builtArtifacts);
+		}
+	}
+
+	private Map<String, String> propertiesToMap(Properties properties) {
+		Map<String, String> result = new HashMap<String, String>();
+		for (Enumeration<?> iter = properties.propertyNames(); iter.hasMoreElements();) {
+			Object key = iter.nextElement();
+			if (!(key instanceof String)) {
+				continue;
+			}
+			String property = (String) key;
+			result.put(property, properties.getProperty(property));
+		}
+		return result;
+	}
+
+	private void validationConfiguration() throws MojoExecutionException {
+		for (Entry<Object, Object> entry : artifactScmOverrides.entrySet()) {
+			Artifact artifact = createArtifact((String) entry.getKey(), Collections.<DependencyNode> emptyList(), false);
+			if (artifact == null) {
+				throw new MojoExecutionException("Invalid artifact specifier for scm overrides: " + entry.getKey());
+			}
 		}
 	}
 
@@ -213,7 +249,7 @@ public class BuildDependencies extends AbstractMojo {
 
 		// stage 1 -- normal artifacts
 		for (String specifier : artifacts) {
-			Artifact artifact = createArtifact(specifier, Collections.<DependencyNode> emptyList());
+			Artifact artifact = createArtifact(specifier, Collections.<DependencyNode> emptyList(), true);
 			if (artifact == null) {
 				versionReferencingArtifacts.add(specifier);
 				continue;
@@ -232,7 +268,7 @@ public class BuildDependencies extends AbstractMojo {
 
 		// stage 2 -- referencing artifacts
 		for (String specifier : versionReferencingArtifacts) {
-			Artifact artifact = createArtifact(specifier, result);
+			Artifact artifact = createArtifact(specifier, result, true);
 			if (artifact != null) {
 				try {
 					result.add(resolveDependencies(artifact));
@@ -374,7 +410,8 @@ public class BuildDependencies extends AbstractMojo {
 		}
 	}
 
-	private Artifact createArtifact(final String specifier, final List<DependencyNode> graphs) throws MojoExecutionException {
+	private Artifact createArtifact(final String specifier, final List<DependencyNode> graphs, final boolean allowVersionless)
+			throws MojoExecutionException {
 		Pattern artifactPattern = Pattern.compile("^([^:]+):([^:]+)(?::\\{([^:]+):([^:]+)\\}|:(.+))?$");
 		final int refGroupIdGroup = 3; // NOPMD
 		final int refArtifactGroup = 4; // NOPMD
@@ -392,6 +429,8 @@ public class BuildDependencies extends AbstractMojo {
 
 		if (matcher.group(versionGroup) != null) {
 			version = matcher.group(versionGroup);
+		} else if (!allowVersionless) {
+			return null;
 		}
 
 		// specifier can be resolved now completely

@@ -23,9 +23,11 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.ArtifactUtils;
 import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
 import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
 import org.apache.maven.execution.MavenSession;
+import org.apache.maven.model.Scm;
 import org.apache.maven.plugin.BuildPluginManager;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.project.DefaultProjectBuildingRequest;
@@ -93,7 +95,7 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		root.getArtifact().setFile(project.getArtifact().getFile());
 		project.setArtifact(root.getArtifact());
 
-		MavenProject rootProject = findProjectRoot(project);
+		MavenProject rootProject = findProjectRoot(project, session);
 		if (rootProject == null) {
 			return Collections.emptySet();
 		}
@@ -210,13 +212,18 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 	 * For multi-module projects, Maven appends the module name onto the scm url. Obviously this doesn't sit well with every VCS,
 	 * so we look for the project root instead.
 	 */
-	private MavenProject findProjectRoot(final MavenProject project) {
-		// if this project doesn't have one, then its parents won't have one either
-		if (project.getScm() == null) {
-			return null;
-		}
-
+	private MavenProject findProjectRoot(final MavenProject project, final BuildSession session) {
 		for (MavenProject parent = project; parent != null; parent = parent.getParent()) {
+			// has the scm information been overridden for the project
+			String artifactKey = ArtifactUtils.key(project.getArtifact());
+			if (session.getArtifactScmOverrides().containsKey(artifactKey)) {
+				Scm scm = new Scm();
+				scm.setConnection(session.getArtifactScmOverrides().get(artifactKey));
+				project.setScm(scm);
+				return project;
+			}
+
+			// is scm information explicitly provided
 			if (parent.getOriginalModel().getScm() != null) {
 				return parent;
 			}

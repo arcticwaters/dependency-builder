@@ -66,6 +66,8 @@ import org.debian.dependency.builders.BuildSession;
 import org.debian.dependency.builders.BuildStrategy;
 import org.debian.dependency.matchers.ArtifactMatcher;
 import org.debian.dependency.matchers.DependencyNodeArtifactMatcher;
+import org.debian.dependency.matchers.ObjectPropertyMatcher;
+import org.hamcrest.Matchers;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -577,6 +579,42 @@ public class TestBuildDependencies {
 		InOrder order = inOrder(buildStrategy, buildStrategy2);
 		order.verify(buildStrategy2).build(any(DependencyNode.class), any(BuildSession.class));
 		order.verify(buildStrategy).build(any(DependencyNode.class), any(BuildSession.class));
+	}
+
+	@Test
+	public void testScmOverrides() throws Exception {
+		DependencyNode root = createNode(null, "root", "root", "1");
+
+		when(collector.resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
+				.thenReturn(root);
+		when(buildStrategy.build(argThat(new DependencyNodeArtifactMatcher(root)), any(BuildSession.class)))
+				.thenReturn(Collections.singleton(root.getArtifact()));
+
+		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
+		config.addChild("artifact", "some:artifact");
+
+		PlexusConfiguration artifactScmOverrides = new DefaultPlexusConfiguration("artifactScmOverrides");
+		config.addChild(artifactScmOverrides);
+
+		PlexusConfiguration scmOverride1 = new DefaultPlexusConfiguration("property");
+		artifactScmOverrides.addChild(scmOverride1);
+		scmOverride1.addChild("name", "foo:bar:1.2.3");
+		scmOverride1.addChild("value", "scm:local:file");
+
+		PlexusConfiguration scmOverride2 = new DefaultPlexusConfiguration("property");
+		artifactScmOverrides.addChild(scmOverride2);
+		scmOverride2.addChild("name", "fred:flinstone:3.2.1");
+		scmOverride2.addChild("value", "scm:in:the-past");
+
+		lookupConfiguredMojo(config).execute();
+
+		ObjectPropertyMatcher<BuildSession> buildSessionMatcher = new ObjectPropertyMatcher<BuildSession>();
+		buildSessionMatcher.addMatcher(
+				"artifactScmOverrides",
+				Matchers.allOf(Matchers.hasEntry("foo:bar:1.2.3", "scm:local:file"),
+						Matchers.hasEntry("fred:flinstone:3.2.1", "scm:in:the-past")));
+
+		verify(buildStrategy).build(any(DependencyNode.class), argThat(buildSessionMatcher));
 	}
 
 	private Set<Artifact> toArtifactSet(final DependencyNode... nodes) {
