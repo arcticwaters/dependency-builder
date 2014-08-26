@@ -168,7 +168,6 @@ public class BuildDependencies extends AbstractMojo {
 
 		BuildSession buildSession = new BuildSession(session);
 		buildSession.setExtensions(execution.getPlugin().getDependencies());
-		buildSession.setCheckoutDirectory(checkoutDirectory);
 		buildSession.setWorkDirectory(workDirectory);
 		buildSession.setTargetRepository(outputDirectory);
 		buildSession.setArtifactScmOverrides(propertiesToMap(artifactScmOverrides));
@@ -196,7 +195,7 @@ public class BuildDependencies extends AbstractMojo {
 		}
 	}
 
-	private Map<String, String> propertiesToMap(Properties properties) {
+	private Map<String, String> propertiesToMap(final Properties properties) {
 		Map<String, String> result = new HashMap<String, String>();
 		for (Enumeration<?> iter = properties.propertyNames(); iter.hasMoreElements();) {
 			Object key = iter.nextElement();
