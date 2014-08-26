@@ -31,6 +31,7 @@ import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
 import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.Scm;
+import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.plugin.BuildPluginManager;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.project.DefaultProjectBuildingRequest;
@@ -328,6 +329,7 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 			request.setActiveProfileIds(null);
 			request.setInactiveProfileIds(null);
 			request.setUserProperties(null);
+			request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
 
 			ProjectBuildingResult result = projectBuilder.build(artifact, request);
 
