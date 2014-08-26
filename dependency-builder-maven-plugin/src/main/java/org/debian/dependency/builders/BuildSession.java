@@ -71,7 +71,7 @@ public class BuildSession {
 	 *
 	 * @param artifactScmOverrides artifact to scm connection string map
 	 */
-	public void setArtifactScmOverrides(Map<String, String> artifactScmOverrides) {
+	public void setArtifactScmOverrides(final Map<String, String> artifactScmOverrides) {
 		this.artifactScmOverrides = artifactScmOverrides;
 	}
 

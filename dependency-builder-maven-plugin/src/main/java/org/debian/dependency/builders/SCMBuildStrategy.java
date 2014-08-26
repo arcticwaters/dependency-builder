@@ -155,7 +155,7 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		}
 	}
 
-	private boolean needsCheckout(File checkoutDir) throws IOException {
+	private boolean needsCheckout(final File checkoutDir) throws IOException {
 		try {
 			Git git = Git.open(checkoutDir);
 
