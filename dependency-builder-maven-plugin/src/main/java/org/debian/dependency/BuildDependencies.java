@@ -69,10 +69,11 @@ import org.debian.dependency.builders.BuildStrategy;
 import org.debian.dependency.filters.DependencyNodeAncestorOrSelfArtifactFilter;
 import org.debian.dependency.filters.IdentityArtifactFilter;
 import org.debian.dependency.filters.InversionDependencyNodeFilter;
+import org.eclipse.aether.util.StringUtils;
 
 /** Builds the dependencies of a project which deploys Maven metadata. */
 @SuppressWarnings("PMD.GodClass")
-@Mojo(name = "build-dependencies")
+@Mojo(name = "build-dependencies", requiresProject = false)
 public class BuildDependencies extends AbstractMojo {
 	private static final String SUREFIRE_GROUPID = "org.apache.maven.surefire";
 	private static final String SUREFIRE_PLUGIN_VERSION = "{org.apache.maven.plugins:maven-surefire-plugin}";
@@ -82,7 +83,7 @@ public class BuildDependencies extends AbstractMojo {
 	 *
 	 * @see #artifacts
 	 */
-	@Parameter
+	@Parameter(defaultValue = "${artifact}")
 	private String artifact;
 	/**
 	 * Defines all artifacts to build. This can be used to specify multiple artifacts to build, or implicit dependencies which are
@@ -110,10 +111,10 @@ public class BuildDependencies extends AbstractMojo {
 	@Parameter
 	private final StrictPatternArtifactFilter ignoreArtifacts = new StrictPatternArtifactFilter(false);
 	/** Directory where artifact sources should be checked out to. */
-	@Parameter(defaultValue = "${project.build.directory}/dependency-builder/checkout")
+	@Parameter(defaultValue = "${basedir}/target/dependency-builder/checkout")
 	private File checkoutDirectory;
 	/** Directory where local git repositories should be made for potential modifications. */
-	@Parameter(defaultValue = "${project.build.directory}/dependency-builder/work")
+	@Parameter(defaultValue = "${basedir}/target/dependency-builder/work")
 	private File workDirectory;
 	/** Whether to allow more than a single project to be built. */
 	@Parameter
@@ -143,7 +144,7 @@ public class BuildDependencies extends AbstractMojo {
 
 	@Override
 	public void execute() throws MojoExecutionException, MojoFailureException {
-		if (artifact != null) {
+		if (!StringUtils.isEmpty(artifact)) {
 			Set<String> newArtifacts = new LinkedHashSet<String>();
 			newArtifacts.add(artifact);
 			newArtifacts.addAll(artifacts);
