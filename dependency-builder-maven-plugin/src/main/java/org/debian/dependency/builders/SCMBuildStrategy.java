@@ -20,6 +20,9 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
@@ -44,12 +47,12 @@ import org.codehaus.plexus.component.annotations.Configuration;
 import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.logging.AbstractLogEnabled;
 import org.codehaus.plexus.util.FileUtils;
-import org.eclipse.jgit.api.CheckoutCommand;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.RmCommand;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.errors.RepositoryNotFoundException;
 import org.eclipse.jgit.lib.Ref;
+import org.eclipse.jgit.revwalk.RevCommit;
 import org.twdata.maven.mojoexecutor.MojoExecutor;
 
 /**
@@ -60,7 +63,10 @@ import org.twdata.maven.mojoexecutor.MojoExecutor;
 @Component(role = BuildStrategy.class, hint = "scm")
 public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrategy {
 	private static final int PRIORITY = 100;
-	private static final String WORK_BRANCH = "dependency-builder-maven-plugin";
+	private static final String PLUGIN_NAME = "dependency-builder-maven-plugin";
+	private static final String TRACKING_REF = "refs/tracking/dependency-builder-maven-plugin";
+	private static final String TRACKING_MESSAGE = "Dependency builder tracking commit";
+
 	@Configuration(value = "org.apache.maven.plugins")
 	private String scmPluginGroupId;
 	@Configuration(value = "maven-scm-plugin")
@@ -101,28 +107,33 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		}
 
 		// some build systems may not work well with colon in their name (and ntfs just can't handle it)
-		String projectId = rootProject.getId().replace(':', '%');
-		File checkoutDir = new File(session.getCheckoutDirectory(), projectId);
+		String projectId = rootProject.getId().replace(':', '#');
+		File checkoutDir = new File(session.getWorkDirectory(), projectId);
 		checkoutDir.mkdirs();
-		File workDir = new File(session.getWorkDirectory(), projectId);
-		workDir.mkdirs();
+		getLogger().debug("Source location for " + root.getArtifact() + " is " + checkoutDir);
 
-		String scmUrl = checkoutSource(rootProject, checkoutDir, session);
-		Git git = makeLocalCopy(checkoutDir, workDir, scmUrl);
-
-		DependencyCollectingVisitor visitor = new DependencyCollectingVisitor();
+		BottomUpDependencyCollectingVisitor visitor = new BottomUpDependencyCollectingVisitor();
 		for (DependencyNode node : root.getChildren()) {
 			node.accept(visitor);
 		}
 
 		try {
+			getLogger().debug("Checking for tracked repository to continue from");
+			if (needsCheckout(checkoutDir)) {
+				getLogger().debug("No tracked repository at location, checking out new sources: " + checkoutDir);
+				String scmUrl = checkoutSource(rootProject, checkoutDir, session);
+				setupGitRepo(checkoutDir, scmUrl);
+			}
+			Git git = Git.open(checkoutDir);
+
 			SourceBuilder builder = sourceBuilderManager.detect(checkoutDir);
 			if (builder == null) {
 				return Collections.emptySet();
 			}
 			getLogger().debug("Resolved build strategy " + builder + " for " + project);
 
-			final Set<Artifact> built = new HashSet<Artifact>();
+			getLogger().debug("Checking if any dependencies are in the same project");
+			Set<Artifact> built = new HashSet<Artifact>();
 			for (Artifact artifact : visitor.artifacts) {
 				MavenProject depProject = constructProject(artifact, session);
 
@@ -131,6 +142,7 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 				depProject.setArtifact(artifact);
 
 				if (builder.canBuild(depProject, checkoutDir)) {
+					getLogger().debug("Aritfact reported in the same repository: " + artifact);
 					built.addAll(builder.build(depProject, git, session.getTargetRepository()));
 				}
 			}
@@ -143,40 +155,77 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		}
 	}
 
-	private Git makeLocalCopy(final File checkoutDir, final File workDir, final String scmUrl) throws ArtifactBuildException {
+	private boolean needsCheckout(File checkoutDir) throws IOException {
 		try {
-			// if the work directory is already a git repo, we assume its setup correctly
-			try {
-				Git git = Git.open(workDir);
-				ensureOnCorrectBranch(git);
-				return git;
-			} catch (RepositoryNotFoundException e) {
-				getLogger().debug("No repository found at " + workDir + ", creating from " + checkoutDir);
+			Git git = Git.open(checkoutDir);
+
+			Ref trackingRef = null;
+			Map<String, Ref> references = git.getRepository().getAllRefs();
+			for (Entry<String, Ref> reference : references.entrySet()) {
+				if (TRACKING_REF.equals(reference.getKey())) {
+					trackingRef = reference.getValue();
+					break;
+				}
 			}
 
-			// otherwise we need to make a copy from the checkout
+			if (trackingRef != null) {
+				for (RevCommit commit : git.log().add(trackingRef.getObjectId()).call()) {
+					if (commit.getShortMessage().equals(TRACKING_MESSAGE)) {
+						return false;
+					}
+				}
+			}
+			return true;
+		} catch (RepositoryNotFoundException e) {
+			return true;
+		} catch (GitAPIException e) {
+			return true;
+		}
+	}
+
+	private Git setupGitRepo(final File checkoutDir, final String scmUrl) throws ArtifactBuildException {
+		try {
 			Git git;
 			try {
 				// check to see if we checked out a git repo
-				Git.open(checkoutDir);
-
-				FileUtils.copyDirectoryStructure(checkoutDir, workDir);
-				git = Git.open(workDir);
+				git = Git.open(checkoutDir);
 			} catch (RepositoryNotFoundException e) {
-				FileUtils.copyDirectoryStructure(checkoutDir, workDir);
+				git = Git.init().setDirectory(checkoutDir).call();
 
-				git = Git.init().setDirectory(workDir).call();
-				git.add().addFilepattern(".").call();
+				git.add()
+						.addFilepattern(".")
+						.call();
 
-				// we don't want to track other SCM metadata files
-				RmCommand removeAction = git.rm();
-				for (String pattern : FileUtils.getDefaultExcludes()) {
-					removeAction.addFilepattern(pattern);
+				RmCommand rmCommand = git.rm();
+				List<String> excludes = FileUtils.getFileNames(checkoutDir, FileUtils.getDefaultExcludesAsString(), null, false);
+				for (String exclude : excludes) {
+					rmCommand.addFilepattern(exclude);
 				}
-				removeAction.call();
+				if (!excludes.isEmpty()) {
+					rmCommand.call();
+				}
 
-				git.commit().setMessage("Import upstream from " + scmUrl).call();
+				git.commit()
+						.setMessage("Importing upstream from " + scmUrl)
+						.call();
 			}
+
+			git.checkout()
+					.setOrphan(true)
+					.setName(TRACKING_REF)
+					.setCreateBranch(true)
+					.setForce(true)
+					.call();
+
+			StringBuilder message = new StringBuilder(TRACKING_MESSAGE);
+			message.append("\n\n");
+			message.append("This is a tracking commit to denote that this repository has been tracked by the\n");
+			message.append(PLUGIN_NAME + ". It should not be deleted unless you intend to\n");
+			message.append("recreate the repository from scratch.");
+
+			git.commit()
+					.setMessage(message.toString())
+					.call();
 
 			ensureOnCorrectBranch(git);
 			return git;
@@ -187,23 +236,17 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		}
 	}
 
-	private void ensureOnCorrectBranch(final Git git) throws GitAPIException {
-		String workBranchRefName = "refs/heads/" + WORK_BRANCH;
-
-		// make sure that we are on the right branch, again assume its setup correctly if there
-		Ref branchRef = null;
-		for (Ref ref : git.branchList().call()) {
-			if (workBranchRefName.equals(ref.getName())) {
-				branchRef = ref;
-				break;
-			}
+	private void ensureOnCorrectBranch(final Git git) throws IOException, GitAPIException {
+		Ref branchRef = git.getRepository().getRef(PLUGIN_NAME);
+		if (branchRef != null) {
+			return;
 		}
 
-		CheckoutCommand command = git.checkout().setName(WORK_BRANCH);
-		if (branchRef == null) {
-			command.setCreateBranch(true);
-		}
-		command.call();
+		git.checkout()
+				.setName(PLUGIN_NAME)
+				.setCreateBranch(true)
+				.setForce(true)
+				.call();
 
 		git.clean().setCleanDirectories(true).call();
 	}
@@ -322,7 +365,7 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 	}
 
 	/** Collects unique dependencies from a graph in a bottom up fashion, i.e. those without dependencies first. */
-	private static class DependencyCollectingVisitor implements DependencyNodeVisitor {
+	private static class BottomUpDependencyCollectingVisitor implements DependencyNodeVisitor {
 		private final Set<Artifact> artifacts = new LinkedHashSet<Artifact>();
 
 		@Override
