@@ -140,17 +140,9 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 		return Math.max(fullSize - diffSize, 0f) / fullSize;
 	}
 
-	private String repositoryRelative(final Git repo, final String file) {
-		return repositoryRelative(repo, new File(file));
-	}
-
-	private String repositoryRelative(final Git repo, final File file) {
-		return repo.getRepository().getWorkTree().toURI().relativize(file.toURI()).getPath();
-	}
-
 	private List<String> findFilesToProcess(final Git repo, final String includes, final String excludes, final List<String> logMessages)
 			throws IOException, GitAPIException {
-		List<String> processFiles = FileUtils.getFileNames(repo.getRepository().getWorkTree(), includes, excludes, true);
+		List<String> processFiles = FileUtils.getFileNames(repo.getRepository().getWorkTree(), includes, excludes, false);
 		if (processFiles.isEmpty()) {
 			return processFiles;
 		}
@@ -158,7 +150,7 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 		// check to see if we've done this before
 		LogCommand logCommand = repo.log();
 		for (String processFile : processFiles) {
-			logCommand.addPath(repositoryRelative(repo, processFile));
+			logCommand.addPath(processFile);
 		}
 
 		for (RevCommit commit : logCommand.call()) {
@@ -183,8 +175,7 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 		List<String> jarsToRemove = new ArrayList<String>();
 		AddCommand addCommand = repo.add();
 		for (String relativeJar : jarFiles) {
-			File jarFile = new File(relativeJar);
-			relativeJar = repositoryRelative(repo, relativeJar);
+			File jarFile = new File(repo.getRepository().getWorkTree(), relativeJar);
 
 			boolean foundDependency = false;
 			for (Dependency dep : project.getDependencies()) {
