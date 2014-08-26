@@ -17,8 +17,10 @@ package org.debian.dependency.builders;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -48,10 +50,13 @@ import org.codehaus.plexus.component.annotations.Configuration;
 import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.logging.AbstractLogEnabled;
 import org.codehaus.plexus.util.FileUtils;
+import org.codehaus.plexus.util.StringUtils;
+import org.eclipse.jgit.api.AddCommand;
 import org.eclipse.jgit.api.Git;
-import org.eclipse.jgit.api.RmCommand;
+import org.eclipse.jgit.api.ResetCommand.ResetType;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.errors.RepositoryNotFoundException;
+import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.twdata.maven.mojoexecutor.MojoExecutor;
@@ -193,30 +198,28 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 			} catch (RepositoryNotFoundException e) {
 				git = Git.init().setDirectory(checkoutDir).call();
 
-				git.add()
-						.addFilepattern(".")
-						.call();
+				// some repositories may have git metadata in them as well, i.e. svn in the case of git-svn
+				List<String> excludes = new ArrayList<String>(FileUtils.getDefaultExcludesAsList());
+				for (Iterator<String> iter = excludes.iterator(); iter.hasNext();) {
+					String exclude = iter.next();
+					if (exclude.endsWith(".gitignore")) {
+						iter.remove();
+					} else if (exclude.endsWith(".gitattributes")) {
+						iter.remove();
+					}
+				}
 
-				RmCommand rmCommand = git.rm();
-				List<String> excludes = FileUtils.getFileNames(checkoutDir, FileUtils.getDefaultExcludesAsString(), null, false);
-				for (String exclude : excludes) {
-					rmCommand.addFilepattern(exclude);
+				List<String> files = FileUtils.getFileNames(checkoutDir, "**/*", StringUtils.join(excludes.iterator(), ","), false);
+				AddCommand addCommand = git.add();
+				for (String file : files) {
+					addCommand.addFilepattern(file);
 				}
-				if (!excludes.isEmpty()) {
-					rmCommand.call();
-				}
+				addCommand.call();
 
 				git.commit()
 						.setMessage("Importing upstream from " + scmUrl)
 						.call();
 			}
-
-			git.checkout()
-					.setOrphan(true)
-					.setName(TRACKING_REF)
-					.setCreateBranch(true)
-					.setForce(true)
-					.call();
 
 			StringBuilder message = new StringBuilder(TRACKING_MESSAGE);
 			message.append("\n\n");
@@ -224,11 +227,24 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 			message.append(PLUGIN_NAME + ". It should not be deleted unless you intend to\n");
 			message.append("recreate the repository from scratch.");
 
+			ObjectId head = git.getRepository().resolve("HEAD");
+
+			git.checkout()
+					.setOrphan(true)
+					.setForce(true)
+					.setName(TRACKING_REF)
+					.call();
+
+			// want this commit to have an empty index
+			git.reset()
+					.setMode(ResetType.MIXED)
+					.call();
+
 			git.commit()
 					.setMessage(message.toString())
 					.call();
 
-			ensureOnCorrectBranch(git);
+			ensureOnCorrectBranch(git, head);
 			return git;
 		} catch (IOException e) {
 			throw new ArtifactBuildException(e);
@@ -237,7 +253,7 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		}
 	}
 
-	private void ensureOnCorrectBranch(final Git git) throws IOException, GitAPIException {
+	private void ensureOnCorrectBranch(final Git git, final ObjectId from) throws IOException, GitAPIException {
 		Ref branchRef = git.getRepository().getRef(PLUGIN_NAME);
 		if (branchRef != null) {
 			return;
@@ -247,6 +263,7 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 				.setName(PLUGIN_NAME)
 				.setCreateBranch(true)
 				.setForce(true)
+				.setStartPoint(from.getName())
 				.call();
 
 		git.clean().setCleanDirectories(true).call();

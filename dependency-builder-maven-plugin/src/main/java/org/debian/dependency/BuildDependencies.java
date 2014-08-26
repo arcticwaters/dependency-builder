@@ -176,6 +176,8 @@ public class BuildDependencies extends AbstractMojo {
 		while (!toBuild.isEmpty()) {
 			DependencyNode artifact = toBuild.get(0);
 
+			installParents(artifact.getArtifact());
+
 			// try and build it
 			Set<Artifact> builtArtifacts = null;
 			for (BuildStrategy buildStrategy : buildStrategies) {
@@ -193,6 +195,31 @@ public class BuildDependencies extends AbstractMojo {
 
 			checkErrors(artifact, builtArtifacts);
 			removeBuiltArtifacts(toBuild, builtArtifacts);
+		}
+	}
+
+	private void installParents(final Artifact artifact) throws MojoExecutionException {
+		try {
+			ArtifactRepository targetRepository = repositorySystem.createLocalRepository(outputDirectory);
+
+			ProjectBuildingRequest request = new DefaultProjectBuildingRequest(session.getProjectBuildingRequest());
+			request.setActiveProfileIds(null);
+			request.setInactiveProfileIds(null);
+			request.setProfiles(null);
+			request.setUserProperties(null);
+			request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
+
+			ProjectBuildingResult result = projectBuilder.build(artifact, request);
+			for (MavenProject parent = result.getProject().getParent(); parent != null; parent = parent.getParent()) {
+				Artifact parentArtifact = resolveArtifact(parent.getArtifact());
+				artifactInstaller.install(parentArtifact.getFile(), parentArtifact, targetRepository);
+			}
+		} catch (InvalidRepositoryException e) {
+			throw new MojoExecutionException("Unable to create local repository", e);
+		} catch (ArtifactInstallationException e) {
+			throw new MojoExecutionException("Unable to install artifact", e);
+		} catch (ProjectBuildingException e) {
+			throw new MojoExecutionException("Unable to build project", e);
 		}
 	}
 
@@ -227,15 +254,18 @@ public class BuildDependencies extends AbstractMojo {
 	}
 
 	private void checkErrors(final DependencyNode artifact, final Set<Artifact> builtArtifacts) throws MojoFailureException {
-		if (!builtArtifacts.contains(artifact.getArtifact())) {
-			throw new MojoFailureException("Aritfact " + artifact.getArtifact() + " was not built!");
-		}
+		// if (!builtArtifacts.contains(artifact.getArtifact())) {
+		// throw new MojoFailureException("Aritfact " + artifact.getArtifact() + " was not built!");
+		// }
 
 		if (!multiProject) {
 			List<DependencyNode> unmetDependencies = findMissingDependencies(artifact, builtArtifacts);
 			if (!unmetDependencies.isEmpty()) {
 				getLog().error("Some dependencies were not built, run again with the artifacts:");
 				for (DependencyNode node : unmetDependencies) {
+					if (node.getArtifact().equals(artifact.getArtifact())) {
+						continue;
+					}
 					getLog().error(" * " + node.getArtifact());
 				}
 				throw new MojoFailureException("Unable to build artifact, unmet dependencies: " + artifact.getArtifact());
@@ -376,24 +406,13 @@ public class BuildDependencies extends AbstractMojo {
 			}
 
 			for (DependencyNode node : new LinkedHashSet<DependencyNode>(collector.getNodes())) {
-				ProjectBuildingRequest request = new DefaultProjectBuildingRequest(session.getProjectBuildingRequest());
-				request.setActiveProfileIds(null);
-				request.setInactiveProfileIds(null);
-				request.setProfiles(null);
-				request.setUserProperties(null);
-				request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
-
 				// artifact first as you could potentially use it without pom, albeit not easily
 				Artifact artifactToInstall = node.getArtifact();
 				artifactToInstall = resolveArtifact(artifactToInstall);
 				artifactInstaller.install(artifactToInstall.getFile(), artifactToInstall, targetRepository);
 
 				// now the parent poms as the project one is useless without them
-				ProjectBuildingResult result = projectBuilder.build(artifactToInstall, request);
-				for (MavenProject parent = result.getProject().getParent(); parent != null; parent = parent.getParent()) {
-					Artifact parentArtifact = resolveArtifact(parent.getArtifact());
-					artifactInstaller.install(parentArtifact.getFile(), parentArtifact, targetRepository);
-				}
+				installParents(artifactToInstall);
 
 				// finally the pom itself
 				Artifact pomArtifact = repositorySystem.createProjectArtifact(artifactToInstall.getGroupId(),
@@ -405,8 +424,6 @@ public class BuildDependencies extends AbstractMojo {
 			throw new MojoExecutionException("Unable to create local repository", e);
 		} catch (ArtifactInstallationException e) {
 			throw new MojoExecutionException("Unable to install artifact", e);
-		} catch (ProjectBuildingException e) {
-			throw new MojoExecutionException("Unable to build project", e);
 		}
 	}
 

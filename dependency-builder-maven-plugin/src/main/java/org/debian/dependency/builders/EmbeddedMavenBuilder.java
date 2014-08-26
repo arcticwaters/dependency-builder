@@ -67,7 +67,14 @@ public class EmbeddedMavenBuilder extends AbstractBuildFileSourceBuilder impleme
 	@Override
 	public Set<Artifact> build(final MavenProject project, final Git repository, final File localRepository) throws ArtifactBuildException {
 		File basedir = repository.getRepository().getWorkTree();
-		Model model = findProjectModel(project, basedir);
+
+		ArtifactRepository targetRepository;
+		try {
+			targetRepository = repositorySystem.createLocalRepository(localRepository);
+		} catch (InvalidRepositoryException e) {
+			throw new ArtifactBuildException(e);
+		}
+		Model model = findProjectModel(project, basedir, targetRepository);
 
 		/*
 		 * Although using the install phase will catch attached artifacts for the project, it won't handle parent poms which are
@@ -76,9 +83,8 @@ public class EmbeddedMavenBuilder extends AbstractBuildFileSourceBuilder impleme
 		 */
 		try {
 			Model parentModel = model;
-			ArtifactRepository targetRepository = repositorySystem.createLocalRepository(localRepository);
 			for (Parent parent = parentModel.getParent(); parent != null; parent = parentModel.getParent()) {
-				parentModel = findProjectModel(parent.getGroupId(), parent.getArtifactId(), parent.getVersion(), basedir);
+				parentModel = findProjectModel(parent.getGroupId(), parent.getArtifactId(), parent.getVersion(), basedir, targetRepository);
 				if (parentModel == null) {
 					break; // it's not in this repository
 				}
@@ -89,8 +95,6 @@ public class EmbeddedMavenBuilder extends AbstractBuildFileSourceBuilder impleme
 			}
 		} catch (ArtifactInstallationException e) {
 			throw new ArtifactBuildException("Unable to install parent", e);
-		} catch (InvalidRepositoryException e) {
-			throw new ArtifactBuildException(e);
 		}
 
 		InvocationRequest request = new DefaultInvocationRequest()
@@ -118,18 +122,20 @@ public class EmbeddedMavenBuilder extends AbstractBuildFileSourceBuilder impleme
 		}
 	}
 
-	private Model findProjectModel(final MavenProject project, final File basedir) throws ArtifactBuildException {
-		return findProjectModel(project.getGroupId(), project.getArtifactId(), project.getVersion(), basedir);
+	private Model findProjectModel(final MavenProject project, final File basedir, final ArtifactRepository repository)
+			throws ArtifactBuildException {
+		return findProjectModel(project.getGroupId(), project.getArtifactId(), project.getVersion(), basedir, repository);
 	}
 
-	private Model findProjectModel(final String groupId, final String artifactId, final String version, final File basedir)
-			throws ArtifactBuildException {
+	private Model findProjectModel(final String groupId, final String artifactId, final String version, final File basedir,
+			final ArtifactRepository repository) throws ArtifactBuildException {
 		try {
 			for (File pom : findBuildFiles(basedir)) {
 				try {
 					ModelBuildingRequest request = new DefaultModelBuildingRequest()
 							.setPomFile(pom)
 							.setModelSource(new FileModelSource(pom))
+							.setModelResolver(new ExplicitArtifactRepositoryModelResolver(repositorySystem, repository))
 							.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
 
 					Model model = modelBuilder.build(request).getEffectiveModel();
@@ -145,8 +151,7 @@ public class EmbeddedMavenBuilder extends AbstractBuildFileSourceBuilder impleme
 		} catch (IOException e) {
 			throw new ArtifactBuildException(e);
 		}
-		throw new ArtifactBuildException("Unable to find reactor containing " + groupId + ":" + artifactId + ":" + version + " under "
-				+ basedir);
+		return null;
 	}
 
 	@Override
@@ -166,6 +171,8 @@ public class EmbeddedMavenBuilder extends AbstractBuildFileSourceBuilder impleme
 					return true;
 				}
 			} catch (ModelBuildingException e) {
+				getLogger().debug("Ignoring unresolvable model", e);
+			} catch (IllegalArgumentException e) {
 				getLogger().debug("Ignoring unresolvable model", e);
 			}
 		}
