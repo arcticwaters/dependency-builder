@@ -91,6 +91,12 @@
 			</exclusions>
 		</dependency>
 		<dependency>
+			<groupId>org.debian.dependency</groupId>
+			<artifactId>dependency-builder-api</artifactId>
+			<version>0.0.1-SNAPSHOT</version>
+		</dependency>
+
+		<dependency>
 			<groupId>org.twdata.maven</groupId>
 			<artifactId>mojo-executor</artifactId>
 			<version>2.2.0</version>

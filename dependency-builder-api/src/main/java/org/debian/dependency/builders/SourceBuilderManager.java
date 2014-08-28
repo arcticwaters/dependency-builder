@@ -28,7 +28,7 @@ public interface SourceBuilderManager {
 	 * @param directory where a source builder would build
 	 * @return {@link SourceBuilder} that should be used for building
 	 * @throws IOException in case of errors
-	 * @see SourceBuilder#canBuild(File)
+	 * @see SourceBuilder#getPriority(File)
 	 */
 	SourceBuilder detect(File directory) throws IOException;
 
