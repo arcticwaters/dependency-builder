@@ -22,40 +22,93 @@ import static org.mockito.Mockito.when;
 
 import java.io.File;
 
+import org.junit.Before;
 import org.junit.Test;
 
 /** Test case for {@link DefaultSourceBuilderManager} . */
 public class TestDefaultSourceBuilderManager {
 	private final DefaultSourceBuilderManager sourceBuilderManager = new DefaultSourceBuilderManager();
+	private static final int PRIORITY_INVALID = -1;
+	private static final int PRIORITY_LOW = 1000;
+	private static final int PRIORITY_MID = 500;
+	private static final int PRIORITY_HIGH = 100;
 
+	private SourceBuilder invalidPriorityBuilder;
+	private SourceBuilder lowPriorityBuilder;
+	private SourceBuilder midPriorityBuilder;
+	private SourceBuilder highPriorityBuilder;
+
+	@Before
+	public void setUp() throws Exception {
+		invalidPriorityBuilder = mock(SourceBuilder.class);
+		lowPriorityBuilder = mock(SourceBuilder.class);
+		midPriorityBuilder = mock(SourceBuilder.class);
+		highPriorityBuilder = mock(SourceBuilder.class);
+
+		when(invalidPriorityBuilder.getPriority(any(File.class)))
+				.thenReturn(PRIORITY_INVALID);
+		when(lowPriorityBuilder.getPriority(any(File.class)))
+				.thenReturn(PRIORITY_LOW);
+		when(midPriorityBuilder.getPriority(any(File.class)))
+				.thenReturn(PRIORITY_MID);
+		when(highPriorityBuilder.getPriority(any(File.class)))
+				.thenReturn(PRIORITY_HIGH);
+	}
+
+	/** Correct builder is selected when they are added in priority order. */
 	@Test
 	public void testPriorityOrder() throws Exception {
-		SourceBuilder noPriorityBuilder = mock(SourceBuilder.class);
-		SourceBuilder lowPriorityBuilder = mock(SourceBuilder.class);
-		SourceBuilder midPriorityBuilder = mock(SourceBuilder.class);
-		SourceBuilder highPriorityBuilder = mock(SourceBuilder.class);
-
-		final int noPriority = -1;
-		final int lowPriority = 1000;
-		final int midPriority = 500;
-		final int highPriority = 100;
-
-		when(noPriorityBuilder.getPriority(any(File.class)))
-				.thenReturn(noPriority);
-		when(lowPriorityBuilder.getPriority(any(File.class)))
-				.thenReturn(lowPriority);
-		when(midPriorityBuilder.getPriority(any(File.class)))
-				.thenReturn(midPriority);
-		when(highPriorityBuilder.getPriority(any(File.class)))
-				.thenReturn(highPriority);
-
-		sourceBuilderManager.addSourceBuilder(noPriorityBuilder);
+		sourceBuilderManager.addSourceBuilder(invalidPriorityBuilder);
 		sourceBuilderManager.addSourceBuilder(lowPriorityBuilder);
 		sourceBuilderManager.addSourceBuilder(midPriorityBuilder);
 		sourceBuilderManager.addSourceBuilder(highPriorityBuilder);
 
-		File directory = new File("test");
-		SourceBuilder picked = sourceBuilderManager.detect(directory);
+		SourceBuilder picked = sourceBuilderManager.detect(new File("dir"));
 		assertEquals(picked, highPriorityBuilder);
+	}
+
+	/** Correct builder is selected when they are added in reverse priority order. */
+	@Test
+	public void testPriorityReverseOrder() throws Exception {
+		sourceBuilderManager.addSourceBuilder(highPriorityBuilder);
+		sourceBuilderManager.addSourceBuilder(midPriorityBuilder);
+		sourceBuilderManager.addSourceBuilder(lowPriorityBuilder);
+		sourceBuilderManager.addSourceBuilder(invalidPriorityBuilder);
+
+		SourceBuilder picked = sourceBuilderManager.detect(new File("dir"));
+		assertEquals(picked, highPriorityBuilder);
+	}
+
+	/** Correct builder is selected when the highest priority not inserted first or last. */
+	@Test
+	public void testPriorityInRandomOrder() throws Exception {
+		sourceBuilderManager.addSourceBuilder(midPriorityBuilder);
+		sourceBuilderManager.addSourceBuilder(highPriorityBuilder);
+		sourceBuilderManager.addSourceBuilder(invalidPriorityBuilder);
+		sourceBuilderManager.addSourceBuilder(lowPriorityBuilder);
+
+		SourceBuilder picked = sourceBuilderManager.detect(new File("dir"));
+		assertEquals(picked, highPriorityBuilder);
+	}
+
+	/** Correct builder is selected when there is no invalid priority. */
+	@Test
+	public void testPriorityEverythingButInvalid() throws Exception {
+		sourceBuilderManager.addSourceBuilder(midPriorityBuilder);
+		sourceBuilderManager.addSourceBuilder(highPriorityBuilder);
+		sourceBuilderManager.addSourceBuilder(lowPriorityBuilder);
+
+		SourceBuilder picked = sourceBuilderManager.detect(new File("dir"));
+		assertEquals(picked, highPriorityBuilder);
+	}
+
+	/** Correct builder is selected with different priorities. */
+	@Test
+	public void testPriorityDifferent() throws Exception {
+		sourceBuilderManager.addSourceBuilder(midPriorityBuilder);
+		sourceBuilderManager.addSourceBuilder(lowPriorityBuilder);
+
+		SourceBuilder picked = sourceBuilderManager.detect(new File("dir"));
+		assertEquals(picked, midPriorityBuilder);
 	}
 }

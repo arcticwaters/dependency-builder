@@ -102,12 +102,12 @@ public abstract class AbstractBuildFileSourceBuilder extends AbstractLogEnabled 
 	 */
 	@Override
 	public int getPriority(final File directory) throws IOException {
-		List<File> poms = findBuildFiles(directory);
-		if (poms == null || poms.isEmpty()) {
+		List<File> buildFiles = findBuildFiles(directory);
+		if (buildFiles == null || buildFiles.isEmpty()) {
 			return -1;
 		}
 
-		int depth = StringUtils.countMatches(poms.get(0).getCanonicalPath(), File.separator);
+		int depth = StringUtils.countMatches(buildFiles.get(0).getCanonicalPath(), File.separator);
 		depth -= StringUtils.countMatches(directory.getCanonicalPath(), File.separator);
 		if (depth == 0 && getPriorityOffset() < 0) {
 			return 0;
