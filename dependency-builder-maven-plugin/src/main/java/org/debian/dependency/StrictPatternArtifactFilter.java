@@ -28,7 +28,7 @@ import org.apache.maven.shared.artifact.filter.StrictPatternIncludesArtifactFilt
  * patterns, this filter will match everything not specified by the exclude patterns. An artifact will not be matched if it
  * matches an exclude pattern regardless if its matched by an include pattern.
  * <p/>
- * Available patterns are described in {@link StrictPatternArtifactFilter}.
+ * Available patterns are described in {@link StrictPatternIncludesArtifactFilter}.
  */
 public class StrictPatternArtifactFilter implements ArtifactFilter {
 	private List<String> includes;

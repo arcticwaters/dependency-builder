@@ -31,11 +31,13 @@ public class TestStrictPatternArtifactFilter {
 	private StrictPatternArtifactFilter matcher = new StrictPatternArtifactFilter();
 	private final Artifact artifact = new DefaultArtifact("com.example", "some-artifact-plugin", "", "", "", "", null);
 
+	/** An empty configuration should allow everything by default. */
 	@Test
 	public void testNoArtifacts() {
 		assertTrue("should match by default", matcher.include(artifact));
 	}
 
+	/** Multiple include/exclude patterns should be allowed. */
 	@Test
 	public void testMultipleIncludesExcludes() {
 		List<String> includes = Arrays.asList("z", "com.example");
@@ -53,6 +55,7 @@ public class TestStrictPatternArtifactFilter {
 		assertFalse("Second exclude pattern should exclude it", matcher.include(artifact));
 	}
 
+	/** Empty lists should be the same as no configuration. */
 	@Test
 	public void testEmptyLists() {
 		List<String> emptyList = Collections.<String> emptyList();
