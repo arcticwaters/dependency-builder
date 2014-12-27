@@ -20,14 +20,14 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
 import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
 import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.BuildPluginManager;
-import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.model.Scm;
 import org.apache.maven.project.DefaultProjectBuildingRequest;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectBuilder;
@@ -35,20 +35,32 @@ import org.apache.maven.project.ProjectBuildingException;
 import org.apache.maven.project.ProjectBuildingRequest;
 import org.apache.maven.project.ProjectBuildingResult;
 import org.apache.maven.repository.RepositorySystem;
+import org.apache.maven.scm.ScmException;
+import org.apache.maven.scm.ScmFileSet;
+import org.apache.maven.scm.ScmTag;
+import org.apache.maven.scm.ScmVersion;
+import org.apache.maven.scm.command.checkout.CheckOutScmResult;
+import org.apache.maven.scm.manager.ScmManager;
+import org.apache.maven.scm.provider.ScmProviderRepositoryWithHost;
+import org.apache.maven.scm.repository.ScmRepository;
+import org.apache.maven.settings.Server;
+import org.apache.maven.settings.building.SettingsProblem;
+import org.apache.maven.settings.crypto.DefaultSettingsDecryptionRequest;
+import org.apache.maven.settings.crypto.SettingsDecrypter;
+import org.apache.maven.settings.crypto.SettingsDecryptionResult;
 import org.apache.maven.shared.dependency.graph.DependencyNode;
 import org.apache.maven.shared.dependency.graph.traversal.DependencyNodeVisitor;
 import org.codehaus.plexus.component.annotations.Component;
-import org.codehaus.plexus.component.annotations.Configuration;
 import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.logging.AbstractLogEnabled;
 import org.codehaus.plexus.util.FileUtils;
+import org.codehaus.plexus.util.StringUtils;
 import org.eclipse.jgit.api.CheckoutCommand;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.RmCommand;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.errors.RepositoryNotFoundException;
 import org.eclipse.jgit.lib.Ref;
-import org.twdata.maven.mojoexecutor.MojoExecutor;
 
 /**
  * An attempt to build artifacts using their source control URL. This strategy attempts to use <scm/> information in an artifacts
@@ -59,31 +71,17 @@ import org.twdata.maven.mojoexecutor.MojoExecutor;
 public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrategy {
 	private static final int PRIORITY = 100;
 	private static final String WORK_BRANCH = "dependency-builder-maven-plugin";
-	@Configuration(value = "org.apache.maven.plugins")
-	private String scmPluginGroupId;
-	@Configuration(value = "maven-scm-plugin")
-	private String scmPluginArtifactId;
-	@Configuration(value = "1.9")
-	private String scmPluginVersion;
-	@Configuration(value = "checkout")
-	private String scmPluginGoalCheckout;
-	@Configuration(value = "checkoutDirectory")
-	private String scmPluginPropCheckoutDir;
-	@Configuration(value = "connectionType")
-	private String scmPluginPropConnectionType;
-	@Configuration(value = "connection")
-	private String scmPluginConnectionTypeCon;
-	@Configuration(value = "developerConnection")
-	private String scmPluginConnectionTypeDev;
 
 	@Requirement
 	private ProjectBuilder projectBuilder;
 	@Requirement
-	private BuildPluginManager buildPluginManager;
-	@Requirement
 	private SourceBuilderManager sourceBuilderManager;
 	@Requirement
 	private RepositorySystem repositorySystem;
+	@Requirement
+	private ScmManager scmManager;
+	@Requirement
+	private SettingsDecrypter settingsDecrypter;
 
 	@Override
 	public Set<Artifact> build(final DependencyNode root, final BuildSession session) throws ArtifactBuildException {
@@ -105,7 +103,7 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		File workDir = new File(session.getWorkDirectory(), projectId);
 		workDir.mkdirs();
 
-		String scmUrl = checkoutSource(rootProject, checkoutDir, session);
+		String scmUrl = checkoutSource(rootProject, checkoutDir, session.getMavenSession());
 		Git git = makeLocalCopy(checkoutDir, workDir, scmUrl);
 
 		DependencyCollectingVisitor visitor = new DependencyCollectingVisitor();
@@ -225,47 +223,89 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		return null;
 	}
 
-	@SuppressWarnings("PMD.PreserveStackTrace")
-	private String checkoutSource(final MavenProject resolvedProject, final File artifactDir, final BuildSession buildSession)
+	private String checkoutSource(final MavenProject project, final File checkoutDirectory, final MavenSession session)
 			throws ArtifactBuildException {
-		MavenSession mavenSession = buildSession.getMavenSession();
-		MavenProject currentProject = mavenSession.getCurrentProject();
-		try {
-			// we override the current project so that maven-scm-plugin can read properties directly from that project
-			mavenSession.setCurrentProject(resolvedProject);
+		Scm scm = project.getScm();
+		if (scm == null) {
+			scm = new Scm();
+		}
 
+		SettingsDecryptionResult decryptionResult = settingsDecrypter.decrypt(new DefaultSettingsDecryptionRequest(session.getSettings()));
+		for (SettingsProblem problem : decryptionResult.getProblems()) {
+			getLogger().warn("Error decrypting settings (" + problem.getLocation() + ") : " + problem.getMessage(), problem.getException());
+		}
+
+		try {
+			// first we check developer connection
+			CheckOutScmResult checkoutResult = null;
+			String connection = scm.getDeveloperConnection();
 			try {
-				// first try the developerConnection
-				MojoExecutor.executeMojo(
-						MojoExecutor.plugin(scmPluginGroupId, scmPluginArtifactId, scmPluginVersion, buildSession.getExtensions()),
-						scmPluginGoalCheckout,
-						MojoExecutor.configuration(
-								MojoExecutor.element(scmPluginPropCheckoutDir, artifactDir.toString()),
-								MojoExecutor.element(scmPluginPropConnectionType, scmPluginConnectionTypeDev)
-								),
-						MojoExecutor.executionEnvironment(currentProject, mavenSession, buildPluginManager)
-						);
-				return resolvedProject.getScm().getDeveloperConnection();
-			} catch (MojoExecutionException e) {
-				try {
-					// now the regular connection
-					MojoExecutor.executeMojo(
-							MojoExecutor.plugin(scmPluginGroupId, scmPluginArtifactId, scmPluginVersion, buildSession.getExtensions()),
-							scmPluginGoalCheckout,
-							MojoExecutor.configuration(
-									MojoExecutor.element(scmPluginPropCheckoutDir, artifactDir.toString()),
-									MojoExecutor.element(scmPluginPropConnectionType, scmPluginConnectionTypeCon)
-									),
-							MojoExecutor.executionEnvironment(currentProject, mavenSession, buildPluginManager)
-							);
-					return resolvedProject.getScm().getConnection();
-				} catch (MojoExecutionException f) {
-					throw new ArtifactBuildException(f);
+				checkoutResult = performCheckout(connection, determineVersion(scm), checkoutDirectory, decryptionResult.getServers());
+			} catch (ScmException e) {
+				// we don't really care about the exception here because we will try the regular connection next
+				getLogger().debug("Unable to checkout sources using developer connection, trying standard connection", e);
+			}
+
+			// now the regular connection if it wasn't successful
+			if (checkoutResult == null || !checkoutResult.isSuccess()) {
+				connection = scm.getConnection();
+				checkoutResult = performCheckout(connection, determineVersion(scm), checkoutDirectory, decryptionResult.getServers());
+			}
+
+			if (checkoutResult == null) {
+				throw new ArtifactBuildException("No scm information available");
+			} else if (!checkoutResult.isSuccess()) {
+				getLogger().error("Provider Message:");
+				getLogger().error(StringUtils.defaultString(checkoutResult.getProviderMessage()));
+				getLogger().error("Commandline:");
+				getLogger().error(StringUtils.defaultString(checkoutResult.getCommandOutput()));
+				throw new ArtifactBuildException("Unable to checkout files: "
+						+ StringUtils.defaultString(checkoutResult.getProviderMessage()));
+			}
+			return connection;
+		} catch (ScmException e) {
+			throw new ArtifactBuildException("Unable to checkout project", e);
+		}
+	}
+
+	private CheckOutScmResult performCheckout(final String connection, final ScmVersion version, final File directory,
+			final List<Server> servers) throws ScmException {
+		if (StringUtils.isEmpty(connection)) {
+			return null;
+		}
+
+		ScmRepository repository = scmManager.makeScmRepository(connection);
+		if (repository.getProviderRepository() instanceof ScmProviderRepositoryWithHost) {
+			ScmProviderRepositoryWithHost repo = (ScmProviderRepositoryWithHost) repository.getProviderRepository();
+			StringBuilder builder = new StringBuilder(repo.getHost());
+			int port = repo.getPort();
+			if (port > 0) {
+				builder.append(':').append(port);
+			}
+
+			String host = builder.toString();
+			for (Server server : servers) {
+				if (server.getId().equals(host)) {
+					repo.setPassphrase(server.getPassphrase());
+					repo.setPassword(server.getPassword());
+					repo.setPrivateKey(server.getPrivateKey());
+					repo.setUser(server.getUsername());
+					break;
 				}
 			}
-		} finally {
-			mavenSession.setCurrentProject(currentProject);
 		}
+		return scmManager.checkOut(repository, new ScmFileSet(directory), version);
+	}
+
+	private ScmVersion determineVersion(final Scm scm) {
+		/*
+		 * Some scm providers don't work with tags (even the default "HEAD"), i.e. local scm provider. Null will use the default
+		 * branch for most scms.
+		 */
+		if (StringUtils.isEmpty(scm.getTag()) || "HEAD".equals(scm.getTag())) {
+			return null;
+		}
+		return new ScmTag(scm.getTag());
 	}
 
 	private MavenProject constructProject(final Artifact artifact, final BuildSession session) throws ArtifactBuildException {

@@ -38,7 +38,6 @@ import org.apache.maven.artifact.resolver.filter.InversionArtifactFilter;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.plugin.AbstractMojo;
-import org.apache.maven.plugin.MojoExecution;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.Component;
@@ -116,8 +115,6 @@ public class BuildDependencies extends AbstractMojo {
 
 	@Parameter(defaultValue = "${session}")
 	private MavenSession session;
-	@Parameter(defaultValue = "${mojoExecution}")
-	private MojoExecution execution;
 
 	@Component
 	private RepositorySystem repositorySystem;
@@ -154,7 +151,6 @@ public class BuildDependencies extends AbstractMojo {
 		installArtifacts(toInstall);
 
 		BuildSession buildSession = new BuildSession(session);
-		buildSession.setExtensions(execution.getPlugin().getDependencies());
 		buildSession.setCheckoutDirectory(checkoutDirectory);
 		buildSession.setWorkDirectory(workDirectory);
 		buildSession.setTargetRepository(outputDirectory);

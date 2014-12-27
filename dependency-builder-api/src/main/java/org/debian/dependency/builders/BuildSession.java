@@ -16,17 +16,14 @@
 package org.debian.dependency.builders;
 
 import java.io.File;
-import java.util.List;
 
 import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.Dependency;
 
 /**
  * Tracks projects that need to be built.
  */
 public class BuildSession {
 	private final MavenSession session;
-	private List<Dependency> extensions;
 	private File checkoutDirectory;
 	private File workDirectory;
 	private File targetRepository;
@@ -38,22 +35,6 @@ public class BuildSession {
 	 */
 	public BuildSession(final MavenSession session) {
 		this.session = session;
-	}
-
-	/**
-	 * Sets build extensions in case of nested executions.
-	 *
-	 * @param extensions build extensions
-	 */
-	public void setExtensions(final List<Dependency> extensions) {
-		this.extensions = extensions;
-	}
-
-	/**
-	 * @return extensions in case of nested executions
-	 */
-	public List<Dependency> getExtensions() {
-		return extensions;
 	}
 
 	/**
