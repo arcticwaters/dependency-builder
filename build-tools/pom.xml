@@ -6,4 +6,15 @@
 	<groupId>org.debian.dependency</groupId>
 	<artifactId>build-tools</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
+
+	<build>
+		<plugins>
+			<plugin>
+				<artifactId>maven-deploy-plugin</artifactId>
+				<configuration>
+					<skip>true</skip>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
 </project>
