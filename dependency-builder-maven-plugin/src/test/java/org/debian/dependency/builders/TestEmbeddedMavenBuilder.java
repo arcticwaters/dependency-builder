@@ -30,7 +30,6 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Map.Entry;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.installer.ArtifactInstaller;
@@ -43,33 +42,32 @@ import org.apache.maven.shared.invoker.InvocationRequest;
 import org.apache.maven.shared.invoker.InvocationResult;
 import org.apache.maven.shared.invoker.Invoker;
 import org.apache.maven.shared.invoker.MavenInvocationException;
+import org.codehaus.plexus.PlexusConstants;
 import org.codehaus.plexus.util.cli.CommandLineException;
 import org.debian.dependency.matchers.ObjectPropertyMatcher;
 import org.eclipse.jgit.api.Git;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.runners.MockitoJUnitRunner;
 
 /** Tests for {@link EmbeddedMavenBuilder}. */
+@RunWith(MockitoJUnitRunner.class)
 public class TestEmbeddedMavenBuilder {
 	@Rule
 	public MojoRule mojoRule = new MojoRule();
 
+	@Mock
 	private Invoker invoker;
+	@Mock
 	private ArtifactInstaller artifactInstaller;
-
-	private <T> T mockComponent(final Class<T> type) throws Exception {
-		T mockedComponent = mock(type);
-		for (Entry<String, T> entry : mojoRule.getContainer().lookupMap(type).entrySet()) {
-			mojoRule.getContainer().addComponent(mockedComponent, type, entry.getKey());
-		}
-		return mockedComponent;
-	}
 
 	@Before
 	public void setUp() throws Exception {
-		invoker = mockComponent(Invoker.class);
-		artifactInstaller = mockComponent(ArtifactInstaller.class);
+		mojoRule.getContainer().addComponent(invoker, Invoker.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
+		mojoRule.getContainer().addComponent(artifactInstaller, ArtifactInstaller.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
 
 		when(invoker.execute(any(InvocationRequest.class)))
 				.thenReturn(mock(InvocationResult.class));

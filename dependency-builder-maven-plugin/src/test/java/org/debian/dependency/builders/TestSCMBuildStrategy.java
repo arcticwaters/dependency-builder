@@ -65,9 +65,9 @@ import org.apache.maven.settings.crypto.SettingsDecryptionRequest;
 import org.apache.maven.settings.crypto.SettingsDecryptionResult;
 import org.apache.maven.shared.dependency.graph.DependencyNode;
 import org.apache.maven.shared.dependency.graph.internal.DefaultDependencyNode;
+import org.codehaus.plexus.PlexusConstants;
 import org.codehaus.plexus.util.FileUtils;
 import org.debian.dependency.matchers.ArtifactMatcher;
-import org.debian.dependency.utils.PlexusMockingUtils;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.revwalk.DepthWalk.RevWalk;
@@ -78,10 +78,14 @@ import org.hamcrest.TypeSafeDiagnosingMatcher;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.Mock;
 import org.mockito.invocation.InvocationOnMock;
+import org.mockito.runners.MockitoJUnitRunner;
 import org.mockito.stubbing.Answer;
 
 /** Tests for {@link SCMBuildStrategy}. */
+@RunWith(MockitoJUnitRunner.class)
 public class TestSCMBuildStrategy {
 	private static final String CONNECTION = "connection";
 	private static final String DEVELOPER_CONNECTION = "developerConnection";
@@ -89,16 +93,19 @@ public class TestSCMBuildStrategy {
 	@Rule
 	public MojoRule mojoRule = new MojoRule();
 
-	private SCMBuildStrategy scmBuildStrategy;
-	private SettingsDecrypter settingsDecrypter;
+	@Mock
 	private ScmManager scmManager;
+	@Mock
 	private SourceBuilderManager sourceBuilderManager;
-	private BuildSession buildSession;
+	@Mock
+	private SettingsDecryptionResult decryptionResult;
+	@Mock
+	private SourceBuilder sourceBuilder;
 
+	private SCMBuildStrategy scmBuildStrategy;
+	private BuildSession buildSession;
 	private DependencyNode node;
 	private MavenProject firstResolvedProject;
-	private SettingsDecryptionResult decryptionResult;
-	private SourceBuilder sourceBuilder;
 
 	private File findWorkDirectory() throws URISyntaxException, IOException {
 		URL url = getClass().getResource("/work/marker.txt");
@@ -107,15 +114,14 @@ public class TestSCMBuildStrategy {
 
 	@Before
 	public void setUp() throws Exception {
-		PlexusMockingUtils mockingUtils = new PlexusMockingUtils(mojoRule.getContainer());
+		mojoRule.getContainer().addComponent(sourceBuilderManager, SourceBuilderManager.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
+		mojoRule.getContainer().addComponent(scmManager, ScmManager.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
 
-		sourceBuilderManager = mockingUtils.mockComponent(SourceBuilderManager.class);
-		sourceBuilder = mock(SourceBuilder.class);
 		when(sourceBuilderManager.detect(any(File.class)))
 				.thenReturn(sourceBuilder);
 
-		settingsDecrypter = mockingUtils.mockComponent(SettingsDecrypter.class);
-		decryptionResult = mock(SettingsDecryptionResult.class);
+		SettingsDecrypter settingsDecrypter = mock(SettingsDecrypter.class);
+		mojoRule.getContainer().addComponent(settingsDecrypter, SettingsDecrypter.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
 		when(settingsDecrypter.decrypt(any(SettingsDecryptionRequest.class)))
 				.thenReturn(decryptionResult);
 
@@ -143,16 +149,14 @@ public class TestSCMBuildStrategy {
 		firstResolvedProject.getScm().setConnection(CONNECTION);
 		firstResolvedProject.getScm().setDeveloperConnection(DEVELOPER_CONNECTION);
 
-		mockRepositorySystem(mockingUtils);
-		mockProjectBuilder(mockingUtils);
-		scmManager = mockScmManager(mockingUtils);
+		mockRepositorySystem();
+		mockProjectBuilder();
+		setupScmManagerMock();
 
 		scmBuildStrategy = (SCMBuildStrategy) mojoRule.getContainer().lookup(BuildStrategy.class, "scm");
 	}
 
-	private ScmManager mockScmManager(final PlexusMockingUtils mockingUtils) throws Exception {
-		ScmManager scmManager = mockingUtils.mockComponent(ScmManager.class);
-
+	private void setupScmManagerMock() throws Exception {
 		ScmRepository scmRepo = mock(ScmRepository.class);
 		when(scmManager.makeScmRepository(anyString()))
 				.thenReturn(scmRepo);
@@ -161,8 +165,6 @@ public class TestSCMBuildStrategy {
 				.thenReturn(true);
 		when(scmManager.checkOut(any(ScmRepository.class), any(ScmFileSet.class), any(ScmVersion.class)))
 				.thenReturn(checkoutResult);
-
-		return scmManager;
 	}
 
 	private static MavenProject createMavenProject(final Artifact artifact) {
@@ -175,8 +177,10 @@ public class TestSCMBuildStrategy {
 		return project;
 	}
 
-	private ProjectBuilder mockProjectBuilder(final PlexusMockingUtils mockingUtils) throws Exception {
-		ProjectBuilder projectBuilder = mockingUtils.mockComponent(ProjectBuilder.class);
+	private ProjectBuilder mockProjectBuilder() throws Exception {
+		ProjectBuilder projectBuilder = mock(ProjectBuilder.class);
+		mojoRule.getContainer().addComponent(projectBuilder, ProjectBuilder.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
+
 		when(projectBuilder.build(any(Artifact.class), any(ProjectBuildingRequest.class)))
 				.then(new Answer<ProjectBuildingResult>() {
 					private boolean firstProjectSet;
@@ -203,8 +207,9 @@ public class TestSCMBuildStrategy {
 		return projectBuilder;
 	}
 
-	private RepositorySystem mockRepositorySystem(final PlexusMockingUtils mockingUtils) throws Exception {
-		RepositorySystem repoSystem = mockingUtils.mockComponent(RepositorySystem.class);
+	private RepositorySystem mockRepositorySystem() throws Exception {
+		RepositorySystem repoSystem = mock(RepositorySystem.class);
+		mojoRule.getContainer().addComponent(repoSystem, RepositorySystem.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
 
 		when(repoSystem.resolve(any(ArtifactResolutionRequest.class)))
 				.then(new Answer<ArtifactResolutionResult>() {

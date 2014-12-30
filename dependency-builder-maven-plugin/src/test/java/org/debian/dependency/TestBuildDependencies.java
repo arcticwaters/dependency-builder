@@ -29,7 +29,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.Map.Entry;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
@@ -57,6 +56,7 @@ import org.apache.maven.repository.RepositorySystem;
 import org.apache.maven.shared.dependency.graph.DependencyNode;
 import org.apache.maven.shared.dependency.graph.internal.DefaultDependencyNode;
 import org.apache.maven.shared.dependency.graph.traversal.DependencyNodeVisitor;
+import org.codehaus.plexus.PlexusConstants;
 import org.codehaus.plexus.component.configurator.ComponentConfigurator;
 import org.codehaus.plexus.component.configurator.expression.ExpressionEvaluator;
 import org.codehaus.plexus.configuration.DefaultPlexusConfiguration;
@@ -69,21 +69,32 @@ import org.debian.dependency.matchers.DependencyNodeArtifactMatcher;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.runner.RunWith;
 import org.mockito.InOrder;
+import org.mockito.Mock;
 import org.mockito.invocation.InvocationOnMock;
+import org.mockito.runners.MockitoJUnitRunner;
 import org.mockito.stubbing.Answer;
 
 /** Test case for {@link BuildDependencies}. */
+@RunWith(MockitoJUnitRunner.class)
 public class TestBuildDependencies {
 	@Rule
 	public MojoRule mojoRule = new MojoRule();
 
+	@Mock
 	private DependencyCollector collector;
+	@Mock
 	private BuildStrategy buildStrategy;
+	@Mock
 	private BuildStrategy buildStrategy2;
+	@Mock
 	private ArtifactInstaller installer;
+	@Mock
 	private RepositorySystem repositorySystem;
+	@Mock
 	private ComponentConfigurator configurator;
+	@Mock
 	private ProjectBuilder projectBuilder;
 
 	private BuildDependencies lookupConfiguredMojo() throws Exception {
@@ -128,24 +139,16 @@ public class TestBuildDependencies {
 		return buildDependenciesMojo;
 	}
 
-	private <T> T mockComponent(final Class<T> type) throws Exception {
-		T mockedComponent = mock(type);
-		for (Entry<String, T> entry : mojoRule.getContainer().lookupMap(type).entrySet()) {
-			mojoRule.getContainer().addComponent(mockedComponent, type, entry.getKey());
-		}
-		return mockedComponent;
-	}
-
 	@Before
 	public void setUp() throws Exception {
 		configurator = mojoRule.getContainer().lookup(ComponentConfigurator.class, "basic");
 
-		collector = mockComponent(DependencyCollector.class);
-		buildStrategy = mockComponent(BuildStrategy.class);
-		buildStrategy2 = mockComponent(BuildStrategy.class);
-		installer = mockComponent(ArtifactInstaller.class);
-		repositorySystem = mockComponent(RepositorySystem.class);
-		projectBuilder = mockComponent(ProjectBuilder.class);
+		mojoRule.getContainer().addComponent(collector, DependencyCollector.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
+		mojoRule.getContainer().addComponent(buildStrategy, BuildStrategy.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
+		mojoRule.getContainer().addComponent(buildStrategy2, BuildStrategy.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
+		mojoRule.getContainer().addComponent(installer, ArtifactInstaller.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
+		mojoRule.getContainer().addComponent(repositorySystem, RepositorySystem.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
+		mojoRule.getContainer().addComponent(projectBuilder, ProjectBuilder.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
 
 		when(repositorySystem.createProjectArtifact(anyString(), anyString(), anyString()))
 				.then(new Answer<Artifact>() {

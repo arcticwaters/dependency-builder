@@ -17,15 +17,18 @@ package org.debian.dependency.builders;
 
 import static org.junit.Assert.assertEquals;
 import static org.mockito.Matchers.any;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.runners.MockitoJUnitRunner;
 
 /** Test case for {@link DefaultSourceBuilderManager} . */
+@RunWith(MockitoJUnitRunner.class)
 public class TestDefaultSourceBuilderManager {
 	private final DefaultSourceBuilderManager sourceBuilderManager = new DefaultSourceBuilderManager();
 	private static final int PRIORITY_INVALID = -1;
@@ -33,18 +36,17 @@ public class TestDefaultSourceBuilderManager {
 	private static final int PRIORITY_MID = 500;
 	private static final int PRIORITY_HIGH = 100;
 
+	@Mock
 	private SourceBuilder invalidPriorityBuilder;
+	@Mock
 	private SourceBuilder lowPriorityBuilder;
+	@Mock
 	private SourceBuilder midPriorityBuilder;
+	@Mock
 	private SourceBuilder highPriorityBuilder;
 
 	@Before
 	public void setUp() throws Exception {
-		invalidPriorityBuilder = mock(SourceBuilder.class);
-		lowPriorityBuilder = mock(SourceBuilder.class);
-		midPriorityBuilder = mock(SourceBuilder.class);
-		highPriorityBuilder = mock(SourceBuilder.class);
-
 		when(invalidPriorityBuilder.getPriority(any(File.class)))
 				.thenReturn(PRIORITY_INVALID);
 		when(lowPriorityBuilder.getPriority(any(File.class)))
