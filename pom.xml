@@ -5,7 +5,7 @@
 
 	<groupId>org.debian.dependency</groupId>
 	<artifactId>dependency-builder</artifactId>
-	<version>0.0.1-SNAPSHOT</version>
+	<version>0.1.0-SNAPSHOT</version>
 	<packaging>pom</packaging>
 
 	<name>Dependency Builder</name>
@@ -126,7 +126,7 @@
 							<dependency>
 								<groupId>org.debian.dependency</groupId>
 								<artifactId>build-tools</artifactId>
-								<version>0.0.1-SNAPSHOT</version>
+								<version>0.1.0-SNAPSHOT</version>
 							</dependency>
 						</dependencies>
 					</plugin>
@@ -151,7 +151,7 @@
 							<dependency>
 								<groupId>org.debian.dependency</groupId>
 								<artifactId>build-tools</artifactId>
-								<version>0.0.1-SNAPSHOT</version>
+								<version>0.1.0-SNAPSHOT</version>
 							</dependency>
 						</dependencies>
 					</plugin>
