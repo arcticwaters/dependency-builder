@@ -13,15 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.debian.dependency.builders;
+package org.debian.dependency.sources;
 
 import java.io.File;
-import java.io.IOException;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
@@ -48,34 +43,22 @@ import org.apache.maven.settings.building.SettingsProblem;
 import org.apache.maven.settings.crypto.DefaultSettingsDecryptionRequest;
 import org.apache.maven.settings.crypto.SettingsDecrypter;
 import org.apache.maven.settings.crypto.SettingsDecryptionResult;
-import org.apache.maven.shared.dependency.graph.DependencyNode;
-import org.apache.maven.shared.dependency.graph.traversal.DependencyNodeVisitor;
 import org.codehaus.plexus.component.annotations.Component;
 import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.logging.AbstractLogEnabled;
-import org.codehaus.plexus.util.FileUtils;
 import org.codehaus.plexus.util.StringUtils;
-import org.eclipse.jgit.api.CheckoutCommand;
-import org.eclipse.jgit.api.Git;
-import org.eclipse.jgit.api.RmCommand;
-import org.eclipse.jgit.api.errors.GitAPIException;
-import org.eclipse.jgit.errors.RepositoryNotFoundException;
-import org.eclipse.jgit.lib.Ref;
 
 /**
- * An attempt to build artifacts using their source control URL. This strategy attempts to use <scm/> information in an artifacts
- * pom. First using the developer connection and falling back to the regular connection if the developer connection is not
- * accessible.
+ * Artifact sources are retrieved from the <scm/> information in an artifacts pom. First using the developer connection and
+ * falling back to the regular connection if the developer connection is not accessible.
  */
-@Component(role = BuildStrategy.class, hint = "scm")
-public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrategy {
-	private static final int PRIORITY = 100;
-	private static final String WORK_BRANCH = "dependency-builder-maven-plugin";
+@Component(role = SourceRetrieval.class, hint = "scm")
+public class SCMSourceRetrieval extends AbstractLogEnabled implements SourceRetrieval {
+	@SuppressWarnings("checkstyle:MagicNumber")
+	private static final int PRIORITY = PRIORITY_HIGH + PRIORITY_LOW / 2;
 
 	@Requirement
 	private ProjectBuilder projectBuilder;
-	@Requirement
-	private SourceBuilderManager sourceBuilderManager;
 	@Requirement
 	private RepositorySystem repositorySystem;
 	@Requirement
@@ -84,124 +67,17 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 	private SettingsDecrypter settingsDecrypter;
 
 	@Override
-	public Set<Artifact> build(final DependencyNode root, final BuildSession session) throws ArtifactBuildException {
-		MavenProject project = constructProject(root.getArtifact(), session);
-
-		// ensures subtleties such as null/empty string are maintained
-		root.getArtifact().setFile(project.getArtifact().getFile());
-		project.setArtifact(root.getArtifact());
-
-		MavenProject rootProject = findProjectRoot(project);
-		if (rootProject == null) {
-			return Collections.emptySet();
+	public String getSourceLocation(final Artifact artifact, final MavenSession session) throws SourceRetrievalException {
+		MavenProject project = findProjectRoot(constructProject(artifact, session));
+		Scm scm = project.getScm();
+		if (scm == null) {
+			return null;
 		}
 
-		// some build systems may not work well with colon in their name (and ntfs just can't handle it)
-		String projectId = rootProject.getId().replace(':', '%');
-		File checkoutDir = new File(session.getCheckoutDirectory(), projectId);
-		checkoutDir.mkdirs();
-		File workDir = new File(session.getWorkDirectory(), projectId);
-		workDir.mkdirs();
-
-		String scmUrl = checkoutSource(rootProject, checkoutDir, session.getMavenSession());
-		Git git = makeLocalCopy(checkoutDir, workDir, scmUrl);
-
-		DependencyCollectingVisitor visitor = new DependencyCollectingVisitor();
-		for (DependencyNode node : root.getChildren()) {
-			node.accept(visitor);
+		if (!StringUtils.isEmpty(scm.getConnection())) {
+			return scm.getConnection();
 		}
-
-		try {
-			SourceBuilder builder = sourceBuilderManager.detect(checkoutDir);
-			if (builder == null) {
-				return Collections.emptySet();
-			}
-			getLogger().debug("Resolved build strategy " + builder + " for " + project);
-
-			final Set<Artifact> built = new HashSet<Artifact>();
-			for (Artifact artifact : visitor.artifacts) {
-				MavenProject depProject = constructProject(artifact, session);
-
-				// ensures subtleties such as null/empty string are maintained
-				artifact.setFile(depProject.getArtifact().getFile());
-				depProject.setArtifact(artifact);
-
-				if (builder.canBuild(depProject, checkoutDir)) {
-					built.addAll(builder.build(depProject, git, session.getTargetRepository()));
-				}
-			}
-
-			// we got scm info from root dependency node, it must be built
-			built.addAll(builder.build(project, git, session.getTargetRepository()));
-			return built;
-		} catch (IOException e) {
-			throw new ArtifactBuildException(e);
-		}
-	}
-
-	private Git makeLocalCopy(final File checkoutDir, final File workDir, final String scmUrl) throws ArtifactBuildException {
-		try {
-			// if the work directory is already a git repo, we assume its setup correctly
-			try {
-				Git git = Git.open(workDir);
-				ensureOnCorrectBranch(git);
-				return git;
-			} catch (RepositoryNotFoundException e) {
-				getLogger().debug("No repository found at " + workDir + ", creating from " + checkoutDir);
-			}
-
-			// otherwise we need to make a copy from the checkout
-			Git git;
-			try {
-				// check to see if we checked out a git repo
-				Git.open(checkoutDir);
-
-				FileUtils.copyDirectoryStructure(checkoutDir, workDir);
-				git = Git.open(workDir);
-			} catch (RepositoryNotFoundException e) {
-				FileUtils.copyDirectoryStructure(checkoutDir, workDir);
-
-				git = Git.init().setDirectory(workDir).call();
-				git.add().addFilepattern(".").call();
-
-				// we don't want to track other SCM metadata files
-				RmCommand removeAction = git.rm();
-				for (String pattern : FileUtils.getDefaultExcludes()) {
-					removeAction.addFilepattern(pattern);
-				}
-				removeAction.call();
-
-				git.commit().setMessage("Import upstream from " + scmUrl).call();
-			}
-
-			ensureOnCorrectBranch(git);
-			return git;
-		} catch (IOException e) {
-			throw new ArtifactBuildException(e);
-		} catch (GitAPIException e) {
-			throw new ArtifactBuildException(e);
-		}
-	}
-
-	private void ensureOnCorrectBranch(final Git git) throws GitAPIException {
-		String workBranchRefName = "refs/heads/" + WORK_BRANCH;
-
-		// make sure that we are on the right branch, again assume its setup correctly if there
-		Ref branchRef = null;
-		for (Ref ref : git.branchList().call()) {
-			if (workBranchRefName.equals(ref.getName())) {
-				branchRef = ref;
-				break;
-			}
-		}
-
-		CheckoutCommand command = git.checkout().setName(WORK_BRANCH);
-		if (branchRef == null) {
-			command.setCreateBranch(true);
-		}
-		command.call();
-
-		git.clean().setCleanDirectories(true).call();
+		return scm.getDeveloperConnection();
 	}
 
 	/*
@@ -211,7 +87,7 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 	private MavenProject findProjectRoot(final MavenProject project) {
 		// if this project doesn't have one, then its parents won't have one either
 		if (project.getScm() == null) {
-			return null;
+			return project;
 		}
 
 		for (MavenProject parent = project; parent != null; parent = parent.getParent()) {
@@ -220,14 +96,16 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 			}
 		}
 
-		return null;
+		return project;
 	}
 
-	private String checkoutSource(final MavenProject project, final File checkoutDirectory, final MavenSession session)
-			throws ArtifactBuildException {
+	@Override
+	public String retrieveSource(final Artifact artifact, final File directory, final MavenSession session)
+			throws SourceRetrievalException {
+		MavenProject project = findProjectRoot(constructProject(artifact, session));
 		Scm scm = project.getScm();
 		if (scm == null) {
-			scm = new Scm();
+			return null;
 		}
 
 		SettingsDecryptionResult decryptionResult = settingsDecrypter.decrypt(new DefaultSettingsDecryptionRequest(session.getSettings()));
@@ -240,7 +118,7 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 			CheckOutScmResult checkoutResult = null;
 			String connection = scm.getDeveloperConnection();
 			try {
-				checkoutResult = performCheckout(connection, determineVersion(scm), checkoutDirectory, decryptionResult.getServers());
+				checkoutResult = performCheckout(connection, determineVersion(scm), directory, decryptionResult.getServers());
 			} catch (ScmException e) {
 				// we don't really care about the exception here because we will try the regular connection next
 				getLogger().debug("Unable to checkout sources using developer connection, trying standard connection", e);
@@ -249,22 +127,22 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 			// now the regular connection if it wasn't successful
 			if (checkoutResult == null || !checkoutResult.isSuccess()) {
 				connection = scm.getConnection();
-				checkoutResult = performCheckout(connection, determineVersion(scm), checkoutDirectory, decryptionResult.getServers());
+				checkoutResult = performCheckout(connection, determineVersion(scm), directory, decryptionResult.getServers());
 			}
 
 			if (checkoutResult == null) {
-				throw new ArtifactBuildException("No scm information available");
+				throw new SourceRetrievalException("No scm information available");
 			} else if (!checkoutResult.isSuccess()) {
 				getLogger().error("Provider Message:");
 				getLogger().error(StringUtils.defaultString(checkoutResult.getProviderMessage()));
 				getLogger().error("Commandline:");
 				getLogger().error(StringUtils.defaultString(checkoutResult.getCommandOutput()));
-				throw new ArtifactBuildException("Unable to checkout files: "
+				throw new SourceRetrievalException("Unable to checkout files: "
 						+ StringUtils.defaultString(checkoutResult.getProviderMessage()));
 			}
 			return connection;
 		} catch (ScmException e) {
-			throw new ArtifactBuildException("Unable to checkout project", e);
+			throw new SourceRetrievalException("Unable to checkout project", e);
 		}
 	}
 
@@ -308,13 +186,13 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		return new ScmTag(scm.getTag());
 	}
 
-	private MavenProject constructProject(final Artifact artifact, final BuildSession session) throws ArtifactBuildException {
+	private MavenProject constructProject(final Artifact artifact, final MavenSession session) throws SourceRetrievalException {
 		try {
 			// pom files are not set up in projects which are not in the workspace, we add them in manually since they are needed
 			Artifact pomArtifact = repositorySystem.createProjectArtifact(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion());
 			pomArtifact = resolveArtifact(pomArtifact, session);
 
-			ProjectBuildingRequest request = new DefaultProjectBuildingRequest(session.getMavenSession().getProjectBuildingRequest());
+			ProjectBuildingRequest request = new DefaultProjectBuildingRequest(session.getProjectBuildingRequest());
 			request.setActiveProfileIds(null);
 			request.setInactiveProfileIds(null);
 			request.setUserProperties(null);
@@ -326,13 +204,13 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 			mavenProject.setFile(pomArtifact.getFile());
 			return mavenProject;
 		} catch (ProjectBuildingException e) {
-			throw new ArtifactBuildException(e);
+			throw new SourceRetrievalException(e);
 		}
 	}
 
-	private Artifact resolveArtifact(final Artifact toResolve, final BuildSession session) {
+	private Artifact resolveArtifact(final Artifact toResolve, final MavenSession session) {
 		ArtifactResolutionRequest request = new ArtifactResolutionRequest()
-				.setLocalRepository(session.getMavenSession().getLocalRepository())
+				.setLocalRepository(session.getLocalRepository())
 				.setOffline(true)
 				.setResolveRoot(true)
 				.setArtifact(toResolve);
@@ -346,19 +224,9 @@ public class SCMBuildStrategy extends AbstractLogEnabled implements BuildStrateg
 		return PRIORITY;
 	}
 
-	/** Collects unique dependencies from a graph in a bottom up fashion, i.e. those without dependencies first. */
-	private static class DependencyCollectingVisitor implements DependencyNodeVisitor {
-		private final Set<Artifact> artifacts = new LinkedHashSet<Artifact>();
-
-		@Override
-		public boolean visit(final DependencyNode node) {
-			return true;
-		}
-
-		@Override
-		public boolean endVisit(final DependencyNode node) {
-			artifacts.add(node.getArtifact());
-			return true;
-		}
+	@Override
+	public String getSourceDirname(final Artifact artifact, final MavenSession session) throws SourceRetrievalException {
+		MavenProject project = findProjectRoot(constructProject(artifact, session));
+		return project.getId();
 	}
 }

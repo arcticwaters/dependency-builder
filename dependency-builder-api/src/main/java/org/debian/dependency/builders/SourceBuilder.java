@@ -39,19 +39,7 @@ public interface SourceBuilder {
 	 * @return original artifact with any attached artifacts
 	 * @throws ArtifactBuildException in we are unable to build the artifact
 	 */
-	Set<Artifact> build(MavenProject project, Git repository, File localRepository) throws ArtifactBuildException;
-
-	/**
-	 * A hint to whether this builder can build a {@link MavenProject} from the given directory. The given project is not
-	 * guaranteed to exist in the directory. Since this is only meant as a hint, returning {@code false} does not mean its
-	 * impossible to build the artifact from the directory.
-	 *
-	 * @param project project to build
-	 * @param directory directory to search
-	 * @return whether the artifact can be built from the directory
-	 * @throws IOException in case of errors
-	 */
-	boolean canBuild(MavenProject project, File directory) throws IOException;
+	Set<Artifact> build(Artifact artifact, Git repository, File localRepository) throws ArtifactBuildException;
 
 	/**
 	 * Gets the priority of this builder for the given directory. A small number (including zero) denotes a high priority. A

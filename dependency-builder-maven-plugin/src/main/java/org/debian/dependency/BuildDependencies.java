@@ -16,10 +16,10 @@
 package org.debian.dependency;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -34,7 +34,6 @@ import org.apache.maven.artifact.installer.ArtifactInstaller;
 import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
 import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
-import org.apache.maven.artifact.resolver.filter.InversionArtifactFilter;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.plugin.AbstractMojo;
@@ -51,18 +50,31 @@ import org.apache.maven.project.ProjectBuildingRequest;
 import org.apache.maven.project.ProjectBuildingResult;
 import org.apache.maven.repository.RepositorySystem;
 import org.apache.maven.shared.dependency.graph.DependencyNode;
-import org.apache.maven.shared.dependency.graph.filter.AndDependencyNodeFilter;
 import org.apache.maven.shared.dependency.graph.filter.ArtifactDependencyNodeFilter;
 import org.apache.maven.shared.dependency.graph.traversal.BuildingDependencyNodeVisitor;
 import org.apache.maven.shared.dependency.graph.traversal.CollectingDependencyNodeVisitor;
 import org.apache.maven.shared.dependency.graph.traversal.DependencyNodeVisitor;
 import org.apache.maven.shared.dependency.graph.traversal.FilteringDependencyNodeVisitor;
+import org.codehaus.plexus.component.annotations.Requirement;
+import org.codehaus.plexus.util.FileUtils;
 import org.debian.dependency.builders.ArtifactBuildException;
-import org.debian.dependency.builders.BuildSession;
-import org.debian.dependency.builders.BuildStrategy;
+import org.debian.dependency.builders.SourceBuilder;
+import org.debian.dependency.builders.SourceBuilderManager;
 import org.debian.dependency.filters.DependencyNodeAncestorOrSelfArtifactFilter;
-import org.debian.dependency.filters.IdentityArtifactFilter;
 import org.debian.dependency.filters.InversionDependencyNodeFilter;
+import org.debian.dependency.sources.SourceRetrieval;
+import org.debian.dependency.sources.SourceRetrievalException;
+import org.debian.dependency.sources.SourceRetrievalPriorityComparator;
+import org.eclipse.aether.util.StringUtils;
+import org.eclipse.jgit.api.CheckoutCommand;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.RmCommand;
+import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.errors.RepositoryNotFoundException;
+import org.eclipse.jgit.lib.Ref;
+
+import com.google.common.collect.Iterators;
+import com.google.common.io.Files;
 
 /** Builds the dependencies of a project which deploys Maven metadata. */
 @SuppressWarnings("PMD.GodClass")
@@ -70,6 +82,7 @@ import org.debian.dependency.filters.InversionDependencyNodeFilter;
 public class BuildDependencies extends AbstractMojo {
 	private static final String SUREFIRE_GROUPID = "org.apache.maven.surefire";
 	private static final String SUREFIRE_PLUGIN_VERSION = "{org.apache.maven.plugins:maven-surefire-plugin}";
+	private static final String WORK_BRANCH = "dependency-builder-maven-plugin";
 
 	/**
 	 * A single artifact to build. This parameter will be merged with {@link #artifacts} and built first if both are specified.
@@ -120,8 +133,10 @@ public class BuildDependencies extends AbstractMojo {
 	private RepositorySystem repositorySystem;
 	@Component
 	private ArtifactInstaller artifactInstaller;
-	@Component(role = BuildStrategy.class)
-	private List<BuildStrategy> buildStrategies;
+	@Component(role = SourceRetrieval.class)
+	private List<SourceRetrieval> sourceRetrievals;
+	@Requirement
+	private SourceBuilderManager sourceBuilderManager;
 	@Component
 	private DependencyCollector dependencyCollector;
 	@Component
@@ -137,70 +152,190 @@ public class BuildDependencies extends AbstractMojo {
 		}
 
 		setupDefaultIgnores();
-		buildStrategies = new ArrayList<BuildStrategy>(buildStrategies);
-		Collections.sort(buildStrategies, new Comparator<BuildStrategy>() {
-			@Override
-			public int compare(final BuildStrategy strategy1, final BuildStrategy strategy2) {
-				return strategy1.getPriority() - strategy2.getPriority();
-			}
-		});
 
 		List<DependencyNode> graphs = createArtifactGraph();
-		List<DependencyNode> toInstall = collectArtifactsToInstall(graphs);
+		installArtifacts(collectArtifactsToInstall(graphs));
+
+		if (!checkoutDirectory.mkdirs()) {
+			throw new MojoExecutionException("Unable to create directory: " + checkoutDirectory);
+		}
+		if (!workDirectory.mkdirs()) {
+			throw new MojoExecutionException("Unable to create directory: " + workDirectory);
+		}
+
 		List<DependencyNode> toBuild = collectArtifactsToBuild(graphs);
-		installArtifacts(toInstall);
+		for (Iterator<DependencyNode> graphsIter = toBuild.iterator(); graphsIter.hasNext();) {
+			DependencyNode graph = graphsIter.next();
+			Set<Artifact> builtArtifacts = buildDependencyGraph(graph);
+			checkSingleProjectFailure(graph, graphsIter, builtArtifacts);
+		}
+	}
 
-		BuildSession buildSession = new BuildSession(session);
-		buildSession.setCheckoutDirectory(checkoutDirectory);
-		buildSession.setWorkDirectory(workDirectory);
-		buildSession.setTargetRepository(outputDirectory);
+	private void checkSingleProjectFailure(final DependencyNode first, final Iterator<DependencyNode> rest,
+			final Set<Artifact> builtArtifacts) throws MojoFailureException {
+		if (multiProject) {
+			return;
+		}
 
-		while (!toBuild.isEmpty()) {
-			DependencyNode artifact = toBuild.get(0);
+		CollectingDependencyNodeVisitor collector = new CollectingDependencyNodeVisitor();
+		first.accept(collector);
+		while (rest.hasNext()) {
+			rest.next().accept(collector);
+		}
 
-			// try and build it
-			Set<Artifact> builtArtifacts = null;
-			for (BuildStrategy buildStrategy : buildStrategies) {
-				try {
-					getLog().debug("Attempting to build with " + buildStrategy);
-					builtArtifacts = buildStrategy.build(artifact, buildSession);
-					if (builtArtifacts != null && !builtArtifacts.isEmpty()) {
-						getLog().debug("Artifacts built with strategy!");
-						break;
+		Set<Artifact> artifacts = new HashSet<Artifact>(collector.getNodes().size());
+		for (DependencyNode node : collector.getNodes()) {
+			artifacts.add(node.getArtifact());
+		}
+		artifacts.removeAll(builtArtifacts);
+
+		if (!artifacts.isEmpty()) {
+			getLog().error("Some dependencies were not built, run again with the artifacts:");
+			for (Artifact artifact : artifacts) {
+				getLog().error(" * " + artifact);
+			}
+			throw new MojoFailureException("Unable to build artifact, unmet dependencies: "
+					+ collector.getNodes().get(0).getArtifact());
+		}
+	}
+
+	private Set<Artifact> buildDependencyGraph(final DependencyNode graph) throws MojoFailureException, MojoExecutionException {
+		Iterator<DependencyNode> iter;
+		if (multiProject) {
+			iter = Iterators.singletonIterator(graph);
+		} else {
+			CollectingDependencyNodeVisitor collector = new CollectingDependencyNodeVisitor();
+			graph.accept(collector);
+
+			// reversed ensures dependencies of dependencies are built first
+			iter = new ReversedIterator<DependencyNode>(collector.getNodes());
+		}
+
+		Set<Artifact> result = new HashSet<Artifact>();
+		while (iter.hasNext()) {
+			DependencyNode node = iter.next();
+			try {
+				Git git = checkoutSource(node);
+				SourceBuilder builder = sourceBuilderManager.detect(git.getRepository().getWorkTree());
+				if (builder == null) {
+					throw new MojoFailureException("Unknown build system for " + node.getArtifact());
+				}
+
+				Set<Artifact> built = builder.build(node.getArtifact(), git, outputDirectory);
+				if (!built.contains(node.getArtifact())) {
+					getLog().warn("Artifact not found in built artifacts: " + node.getArtifact());
+				}
+				result.addAll(built);
+			} catch (IOException e) {
+				throw new MojoExecutionException("Unable to build artifact: " + node.getArtifact(), e);
+			} catch (SourceRetrievalException e) {
+				throw new MojoExecutionException("Unable to retrieve source: " + node.getArtifact(), e);
+			} catch (ArtifactBuildException e) {
+				throw new MojoExecutionException("Unable to build artifact: " + node.getArtifact(), e);
+			}
+		}
+		return result;
+	}
+
+	private Git checkoutSource(final DependencyNode node) throws SourceRetrievalException, IOException {
+		// checkout source of artifact
+		String location = null;
+		File nodeDir = createNewDir(checkoutDirectory, "WORKING-");
+		SourceRetrieval selected = null;
+		for (SourceRetrieval sourceRetrieval : sourceRetrievals) {
+			location = sourceRetrieval.retrieveSource(node.getArtifact(), nodeDir, session);
+			if (!StringUtils.isEmpty(location)) {
+				selected = sourceRetrieval;
+				break;
+			}
+		}
+
+		String dirname = selected.getSourceDirname(node.getArtifact(), session);
+		dirname = dirname.replaceAll("[^a-zA-Z0-9.-]", "_");
+		File destination = new File(checkoutDirectory, dirname);
+		Files.move(nodeDir, destination);
+		nodeDir = destination;
+
+		Git git = makeLocalCopy(nodeDir, new File(workDirectory, nodeDir.getName()), location);
+		return git;
+	}
+
+	/*
+	 * This can be replaced by java.nio.file.Files#createTempDir when java 1.7+ becomes the lowest supported version
+	 */
+	private static File createNewDir(final File parent, final String prefix) {
+		int index = 0;
+		File file;
+		do {
+			file = new File(parent, prefix + ++index);
+		} while (!file.mkdir());
+		return file;
+	}
+
+	private Git makeLocalCopy(final File fromdir, final File todir, final String location) throws IOException {
+		try {
+			// if the work directory is already a git repo, we assume its setup correctly
+			try {
+				Git git = Git.open(todir);
+				ensureOnCorrectBranch(git);
+				return git;
+			} catch (RepositoryNotFoundException e) {
+				getLog().debug("No repository found at " + todir + ", creating from " + fromdir);
+			}
+
+			// otherwise we need to make a copy from the checkout
+			Git git;
+			try {
+				// check to see if we checked out a git repo
+				Git.open(fromdir);
+
+				FileUtils.copyDirectoryStructure(fromdir, todir);
+				git = Git.open(todir);
+			} catch (RepositoryNotFoundException e) {
+				FileUtils.copyDirectoryStructure(fromdir, todir);
+
+				git = Git.init().setDirectory(todir).call();
+				git.add().addFilepattern(".").call();
+
+				// we don't want to track other SCM metadata files
+				RmCommand removeAction = git.rm();
+				for (String pattern : FileUtils.getDefaultExcludes()) {
+					if (pattern.startsWith(".git")) {
+						continue;
 					}
-				} catch (ArtifactBuildException e) {
-					getLog().debug("Unable to build with strategy " + buildStrategy + ", trying next one", e);
+					removeAction.addFilepattern(pattern);
 				}
+				removeAction.call();
+
+				git.commit().setMessage("Import upstream from " + location).call();
 			}
 
-			checkErrors(artifact, builtArtifacts);
-			removeBuiltArtifacts(toBuild, builtArtifacts);
+			ensureOnCorrectBranch(git);
+			return git;
+		} catch (GitAPIException e) {
+			throw new IOException(e);
 		}
 	}
 
-	private void removeBuiltArtifacts(final List<DependencyNode> toBuild, final Set<Artifact> builtArtifacts) {
-		for (Iterator<DependencyNode> iter = toBuild.iterator(); iter.hasNext();) {
-			if (builtArtifacts.contains(iter.next().getArtifact())) {
-				iter.remove();
+	private void ensureOnCorrectBranch(final Git git) throws GitAPIException {
+		String workBranchRefName = "refs/heads/" + WORK_BRANCH;
+
+		// make sure that we are on the right branch, again assume its setup correctly if there
+		Ref branchRef = null;
+		for (Ref ref : git.branchList().call()) {
+			if (workBranchRefName.equals(ref.getName())) {
+				branchRef = ref;
+				break;
 			}
 		}
-	}
 
-	private void checkErrors(final DependencyNode artifact, final Set<Artifact> builtArtifacts) throws MojoFailureException {
-		if (!builtArtifacts.contains(artifact.getArtifact())) {
-			throw new MojoFailureException("Aritfact " + artifact.getArtifact() + " was not built!");
+		CheckoutCommand command = git.checkout().setName(WORK_BRANCH);
+		if (branchRef == null) {
+			command.setCreateBranch(true);
 		}
+		command.call();
 
-		if (!multiProject) {
-			List<DependencyNode> unmetDependencies = findMissingDependencies(artifact, builtArtifacts);
-			if (!unmetDependencies.isEmpty()) {
-				getLog().error("Some dependencies were not built, run again with the artifacts:");
-				for (DependencyNode node : unmetDependencies) {
-					getLog().error(" * " + node.getArtifact());
-				}
-				throw new MojoFailureException("Unable to build artifact, unmet dependencies: " + artifact.getArtifact());
-			}
-		}
+		git.clean().setCleanDirectories(true).call();
 	}
 
 	private List<DependencyNode> createArtifactGraph() throws MojoExecutionException {
@@ -263,18 +398,6 @@ public class BuildDependencies extends AbstractMojo {
 		artifacts.add(String.format("%s:surefire-junit4:%s", SUREFIRE_GROUPID, SUREFIRE_PLUGIN_VERSION));
 		artifacts.add(String.format("%s:surefire-junit47:%s", SUREFIRE_GROUPID, SUREFIRE_PLUGIN_VERSION));
 		artifacts.add(String.format("%s:surefire-testng:%s", SUREFIRE_GROUPID, SUREFIRE_PLUGIN_VERSION));
-	}
-
-	private List<DependencyNode> findMissingDependencies(final DependencyNode root, final Collection<Artifact> builtArtifacts) {
-		CollectingDependencyNodeVisitor collector = new CollectingDependencyNodeVisitor();
-		DependencyNodeVisitor filter = new FilteringDependencyNodeVisitor(collector, new AndDependencyNodeFilter(
-				// artifact to build and parent not ignored
-				new InversionDependencyNodeFilter(new DependencyNodeAncestorOrSelfArtifactFilter(new ArtifactDependencyNodeFilter(
-						ignoreArtifacts))),
-				// artifact wasn't built
-				new ArtifactDependencyNodeFilter(new InversionArtifactFilter(new IdentityArtifactFilter(builtArtifacts)))));
-		root.accept(filter);
-		return collector.getNodes();
 	}
 
 	private List<DependencyNode> collectArtifactsToBuild(final List<DependencyNode> graphs) {
@@ -410,8 +533,15 @@ public class BuildDependencies extends AbstractMojo {
 		return null;
 	}
 
-	public void setBuildStrategies(final List<BuildStrategy> buildStrategies) {
-		this.buildStrategies = buildStrategies;
+	/**
+	 * Sets the {@link SourceRetrieval}s to use.
+	 *
+	 * @param sourceRetrievals source retrievals to use
+	 */
+	public void setSourceRetrievals(final List<SourceRetrieval> sourceRetrievals) {
+		List<SourceRetrieval> newRetrievals = new ArrayList<SourceRetrieval>(sourceRetrievals);
+		Collections.sort(newRetrievals, new SourceRetrievalPriorityComparator());
+		this.sourceRetrievals = newRetrievals;
 	}
 
 	/** Detects an artifact with a particular group and artifact id. */
