@@ -30,38 +30,24 @@ import java.util.regex.Pattern;
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.InvalidRepositoryException;
 import org.apache.maven.artifact.installer.ArtifactInstallationException;
-import org.apache.maven.artifact.installer.ArtifactInstaller;
 import org.apache.maven.artifact.repository.ArtifactRepository;
-import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
-import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
 import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.Component;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.project.DefaultProjectBuildingRequest;
-import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.ProjectBuilder;
-import org.apache.maven.project.ProjectBuildingException;
-import org.apache.maven.project.ProjectBuildingRequest;
-import org.apache.maven.project.ProjectBuildingResult;
 import org.apache.maven.repository.RepositorySystem;
 import org.apache.maven.shared.dependency.graph.DependencyNode;
 import org.apache.maven.shared.dependency.graph.filter.ArtifactDependencyNodeFilter;
-import org.apache.maven.shared.dependency.graph.traversal.BuildingDependencyNodeVisitor;
 import org.apache.maven.shared.dependency.graph.traversal.CollectingDependencyNodeVisitor;
 import org.apache.maven.shared.dependency.graph.traversal.DependencyNodeVisitor;
-import org.apache.maven.shared.dependency.graph.traversal.FilteringDependencyNodeVisitor;
 import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.util.FileUtils;
 import org.debian.dependency.builders.ArtifactBuildException;
 import org.debian.dependency.builders.SourceBuilder;
 import org.debian.dependency.builders.SourceBuilderManager;
-import org.debian.dependency.filters.DependencyNodeAncestorOrSelfArtifactFilter;
-import org.debian.dependency.filters.InversionDependencyNodeFilter;
 import org.debian.dependency.sources.SourceRetrieval;
 import org.debian.dependency.sources.SourceRetrievalException;
 import org.debian.dependency.sources.SourceRetrievalPriorityComparator;
@@ -131,16 +117,12 @@ public class BuildDependencies extends AbstractMojo {
 
 	@Component
 	private RepositorySystem repositorySystem;
-	@Component
-	private ArtifactInstaller artifactInstaller;
 	@Component(role = SourceRetrieval.class)
 	private List<SourceRetrieval> sourceRetrievals;
 	@Requirement
 	private SourceBuilderManager sourceBuilderManager;
 	@Component
-	private DependencyCollector dependencyCollector;
-	@Component
-	private ProjectBuilder projectBuilder;
+	private DependencyCollection dependencyCollection;
 
 	@Override
 	public void execute() throws MojoExecutionException, MojoFailureException {
@@ -153,9 +135,6 @@ public class BuildDependencies extends AbstractMojo {
 
 		setupDefaultIgnores();
 
-		List<DependencyNode> graphs = createArtifactGraph();
-		installArtifacts(collectArtifactsToInstall(graphs));
-
 		if (!checkoutDirectory.mkdirs()) {
 			throw new MojoExecutionException("Unable to create directory: " + checkoutDirectory);
 		}
@@ -163,11 +142,25 @@ public class BuildDependencies extends AbstractMojo {
 			throw new MojoExecutionException("Unable to create directory: " + workDirectory);
 		}
 
-		List<DependencyNode> toBuild = collectArtifactsToBuild(graphs);
-		for (Iterator<DependencyNode> graphsIter = toBuild.iterator(); graphsIter.hasNext();) {
-			DependencyNode graph = graphsIter.next();
-			Set<Artifact> builtArtifacts = buildDependencyGraph(graph);
-			checkSingleProjectFailure(graph, graphsIter, builtArtifacts);
+		try {
+			ArtifactRepository repository = repositorySystem.createLocalRepository(outputDirectory);
+			List<DependencyNode> graphs = createArtifactGraph();
+
+			getLog().debug("Installing ignored artifacts");
+			List<DependencyNode> toBuild = dependencyCollection.installDependencies(graphs,
+					new ArtifactDependencyNodeFilter(ignoreArtifacts), repository, session);
+
+			for (Iterator<DependencyNode> graphsIter = toBuild.iterator(); graphsIter.hasNext();) {
+				DependencyNode graph = graphsIter.next();
+				Set<Artifact> builtArtifacts = buildDependencyGraph(graph);
+				checkSingleProjectFailure(graph, graphsIter, builtArtifacts);
+			}
+		} catch (InvalidRepositoryException e) {
+			throw new MojoExecutionException("Unable to create local repository", e);
+		} catch (DependencyResolutionException e) {
+			throw new MojoExecutionException("Unable to resolve dependencies", e);
+		} catch (ArtifactInstallationException e) {
+			throw new MojoExecutionException("Unable to install ignored artifact", e);
 		}
 	}
 
@@ -379,11 +372,11 @@ public class BuildDependencies extends AbstractMojo {
 	private DependencyNode resolveDependencies(final Artifact artifact) throws DependencyResolutionException {
 		// don't resolve build dependencies for artifacts that are going to be installed; they are not used
 		if (ignoreArtifacts.include(artifact)) {
-			return dependencyCollector.resolveProjectDependencies(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion(),
+			return dependencyCollection.resolveProjectDependencies(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion(),
 					null, session);
 		}
 
-		return dependencyCollector.resolveBuildDependencies(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion(), null,
+		return dependencyCollection.resolveBuildDependencies(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion(), null,
 				session);
 	}
 
@@ -398,99 +391,6 @@ public class BuildDependencies extends AbstractMojo {
 		artifacts.add(String.format("%s:surefire-junit4:%s", SUREFIRE_GROUPID, SUREFIRE_PLUGIN_VERSION));
 		artifacts.add(String.format("%s:surefire-junit47:%s", SUREFIRE_GROUPID, SUREFIRE_PLUGIN_VERSION));
 		artifacts.add(String.format("%s:surefire-testng:%s", SUREFIRE_GROUPID, SUREFIRE_PLUGIN_VERSION));
-	}
-
-	private List<DependencyNode> collectArtifactsToBuild(final List<DependencyNode> graphs) {
-		List<DependencyNode> result = new ArrayList<DependencyNode>();
-		for (DependencyNode graph : graphs) {
-			BuildingDependencyNodeVisitor collector = new BuildingDependencyNodeVisitor();
-			DependencyNodeVisitor filter = new FilteringDependencyNodeVisitor(collector, new InversionDependencyNodeFilter(
-					new DependencyNodeAncestorOrSelfArtifactFilter(new ArtifactDependencyNodeFilter(ignoreArtifacts))));
-			graph.accept(filter);
-
-			DependencyNode node = collector.getDependencyTree();
-			if (node != null) {
-				result.add(node);
-			}
-		}
-		return result;
-	}
-
-	private List<DependencyNode> collectArtifactsToInstall(final List<DependencyNode> graphs) throws MojoExecutionException {
-		List<DependencyNode> result = new ArrayList<DependencyNode>();
-
-		for (DependencyNode graph : graphs) {
-			CollectingDependencyNodeVisitor collector = new CollectingDependencyNodeVisitor();
-			DependencyNodeVisitor filter = new FilteringDependencyNodeVisitor(collector, new ArtifactDependencyNodeFilter(ignoreArtifacts));
-			graph.accept(filter);
-
-			result.addAll(collector.getNodes());
-		}
-
-		return result;
-	}
-
-	private Artifact resolveArtifact(final Artifact toResolve) {
-		// otherwise resolve through the normal means
-		ArtifactResolutionRequest request = new ArtifactResolutionRequest()
-				.setLocalRepository(session.getLocalRepository())
-				.setRemoteRepositories(session.getRequest().getRemoteRepositories())
-				.setMirrors(session.getSettings().getMirrors())
-				.setServers(session.getRequest().getServers())
-				.setProxies(session.getRequest().getProxies())
-				.setOffline(session.isOffline())
-				.setForceUpdate(session.getRequest().isUpdateSnapshots())
-				.setResolveRoot(true)
-				.setArtifact(toResolve);
-
-		ArtifactResolutionResult result = repositorySystem.resolve(request);
-		return result.getArtifacts().iterator().next();
-	}
-
-	private void installArtifacts(final List<DependencyNode> toInstall) throws MojoExecutionException {
-		try {
-			ArtifactRepository targetRepository = repositorySystem.createLocalRepository(outputDirectory);
-
-			// flatten tree into a single list
-			CollectingDependencyNodeVisitor collector = new CollectingDependencyNodeVisitor();
-			for (DependencyNode node : toInstall) {
-				getLog().debug("Artifact ignored, copying it and dependnecies from remote: " + node.getArtifact());
-				node.accept(collector);
-			}
-
-			for (DependencyNode node : new LinkedHashSet<DependencyNode>(collector.getNodes())) {
-				ProjectBuildingRequest request = new DefaultProjectBuildingRequest(session.getProjectBuildingRequest());
-				request.setActiveProfileIds(null);
-				request.setInactiveProfileIds(null);
-				request.setProfiles(null);
-				request.setUserProperties(null);
-				request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
-
-				// artifact first as you could potentially use it without pom, albeit not easily
-				Artifact artifactToInstall = node.getArtifact();
-				artifactToInstall = resolveArtifact(artifactToInstall);
-				artifactInstaller.install(artifactToInstall.getFile(), artifactToInstall, targetRepository);
-
-				// now the parent poms as the project one is useless without them
-				ProjectBuildingResult result = projectBuilder.build(artifactToInstall, request);
-				for (MavenProject parent = result.getProject().getParent(); parent != null; parent = parent.getParent()) {
-					Artifact parentArtifact = resolveArtifact(parent.getArtifact());
-					artifactInstaller.install(parentArtifact.getFile(), parentArtifact, targetRepository);
-				}
-
-				// finally the pom itself
-				Artifact pomArtifact = repositorySystem.createProjectArtifact(artifactToInstall.getGroupId(),
-						artifactToInstall.getArtifactId(), artifactToInstall.getVersion());
-				pomArtifact = resolveArtifact(pomArtifact);
-				artifactInstaller.install(pomArtifact.getFile(), pomArtifact, targetRepository);
-			}
-		} catch (InvalidRepositoryException e) {
-			throw new MojoExecutionException("Unable to create local repository", e);
-		} catch (ArtifactInstallationException e) {
-			throw new MojoExecutionException("Unable to install artifact", e);
-		} catch (ProjectBuildingException e) {
-			throw new MojoExecutionException("Unable to build project", e);
-		}
 	}
 
 	private Artifact createArtifact(final String specifier, final List<DependencyNode> graphs) throws MojoExecutionException {

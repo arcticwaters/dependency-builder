@@ -15,14 +15,19 @@
  */
 package org.debian.dependency;
 
+import java.util.List;
+
+import org.apache.maven.artifact.installer.ArtifactInstallationException;
+import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.shared.dependency.graph.DependencyNode;
+import org.apache.maven.shared.dependency.graph.filter.DependencyNodeFilter;
 
 /**
  * Provides a facility to collect dependencies against a project.
  */
-public interface DependencyCollector {
+public interface DependencyCollection {
 	/**
 	 * Attempts to resolve a projects runtime dependencies.
 	 *
@@ -56,4 +61,18 @@ public interface DependencyCollector {
 	DependencyNode resolveBuildDependencies(String groupId, String artifactId, String version,
 			ArtifactFilter filter, MavenSession session) throws DependencyResolutionException;
 
+	/**
+	 * Installs artifacts from the given artifact graphs in the {@link ArtifactRepository}. If selection is non-{@code null}, then
+	 * only the selected artifacts will be installed. All graphs are returned with the installed nodes removed.
+	 *
+	 * @param graphs artifact graphs to walk
+	 * @param selection filter of nodes to install or {@code null} to install everything
+	 * @param repository where artifacts should be installed
+	 * @param session session for resolving artifacts
+	 * @return new artifact graphs with installed artifact and children removed (if any)
+	 * @throws DependencyResolutionException in case of errors
+	 * @throws ArtifactInstallationException in case of errors
+	 */
+	List<DependencyNode> installDependencies(List<DependencyNode> graphs, DependencyNodeFilter selection, ArtifactRepository repository,
+			MavenSession session) throws DependencyResolutionException, ArtifactInstallationException;
 }

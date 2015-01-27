@@ -17,6 +17,8 @@ package org.debian.dependency.matchers;
 
 import org.apache.maven.shared.dependency.graph.DependencyNode;
 import org.hamcrest.Description;
+import org.hamcrest.Factory;
+import org.hamcrest.Matcher;
 import org.hamcrest.TypeSafeMatcher;
 
 /** Matches a {@link DependencyNode} graph via its artifacts. */
@@ -50,7 +52,7 @@ public class DependencyNodeArtifactMatcher extends TypeSafeMatcher<DependencyNod
 			return true;
 		}
 
-		if (!new ArtifactMatcher(node1.getArtifact()).matches(node2.getArtifact())) {
+		if (node1.getArtifact() == null ^ node2.getArtifact() == null || !node1.getArtifact().equals(node2.getArtifact())) {
 			return false;
 		} else if (node1.getChildren().size() != node2.getChildren().size()) {
 			return false;
@@ -71,5 +73,16 @@ public class DependencyNodeArtifactMatcher extends TypeSafeMatcher<DependencyNod
 		}
 
 		return true;
+	}
+
+	/**
+	 * Is the artifact graph the same by matching artifacts?
+	 *
+	 * @param graph reference graph
+	 * @return matcher for matching an artifact graph
+	 */
+	@Factory
+	public static Matcher<DependencyNode> eqArtifactGraph(final DependencyNode graph) {
+		return new DependencyNodeArtifactMatcher(graph);
 	}
 }

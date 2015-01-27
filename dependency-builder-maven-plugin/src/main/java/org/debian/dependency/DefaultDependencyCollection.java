@@ -16,9 +16,17 @@
 package org.debian.dependency;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.installer.ArtifactInstallationException;
+import org.apache.maven.artifact.installer.ArtifactInstaller;
+import org.apache.maven.artifact.repository.ArtifactRepository;
+import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
+import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
 import org.apache.maven.artifact.resolver.filter.AndArtifactFilter;
 import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
 import org.apache.maven.artifact.resolver.filter.ExcludesArtifactFilter;
@@ -39,21 +47,27 @@ import org.apache.maven.repository.RepositorySystem;
 import org.apache.maven.shared.dependency.graph.DependencyGraphBuilder;
 import org.apache.maven.shared.dependency.graph.DependencyGraphBuilderException;
 import org.apache.maven.shared.dependency.graph.DependencyNode;
+import org.apache.maven.shared.dependency.graph.filter.DependencyNodeFilter;
 import org.apache.maven.shared.dependency.graph.traversal.BuildingDependencyNodeVisitor;
+import org.apache.maven.shared.dependency.graph.traversal.CollectingDependencyNodeVisitor;
 import org.apache.maven.shared.dependency.graph.traversal.DependencyNodeVisitor;
+import org.apache.maven.shared.dependency.graph.traversal.FilteringDependencyNodeVisitor;
 import org.codehaus.plexus.component.annotations.Component;
 import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.logging.AbstractLogEnabled;
+import org.debian.dependency.filters.DependencyNodeAncestorOrSelfArtifactFilter;
 
-/** Default implementation of {@link DependencyCollector}. */
-@Component(role = DependencyCollector.class, hint = "default")
-public class DefaultDependencyCollector extends AbstractLogEnabled implements DependencyCollector {
+/** Default implementation of {@link DependencyCollection}. */
+@Component(role = DependencyCollection.class, hint = "default")
+public class DefaultDependencyCollection extends AbstractLogEnabled implements DependencyCollection {
 	@Requirement
 	private ProjectBuilder projectBuilder;
 	@Requirement
 	private DependencyGraphBuilder dependencyGraphBuilder;
 	@Requirement
 	private RepositorySystem repositorySystem;
+	@Requirement
+	private ArtifactInstaller artifactInstaller;
 
 	@Override
 	public DependencyNode resolveProjectDependencies(final String groupId, final String artifactId, final String version,
@@ -169,5 +183,103 @@ public class DefaultDependencyCollector extends AbstractLogEnabled implements De
 		} catch (ProjectBuildingException e) {
 			throw new DependencyResolutionException(e);
 		}
+	}
+
+	@Override
+	public List<DependencyNode> installDependencies(final List<DependencyNode> graphs, final DependencyNodeFilter selection,
+			final ArtifactRepository repository, final MavenSession session) throws DependencyResolutionException,
+			ArtifactInstallationException {
+		Set<Artifact> installing = new HashSet<Artifact>();
+		List<DependencyNode> notInstalled = collectNodes(graphs, selection, installing);
+
+		for (Artifact artifact : installing) {
+			getLogger().debug("Installing " + artifact);
+
+			// artifact first as you could potentially use it without pom, albeit not easily
+			artifact = resolveArtifact(artifact, session);
+			artifactInstaller.install(artifact.getFile(), artifact, repository);
+
+			// now the parent poms as the project one is useless without them
+			MavenProject project = buildProject(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion(), session);
+			for (MavenProject parent = project.getParent(); parent != null; parent = parent.getParent()) {
+				Artifact parentArtifact = resolveArtifact(parent.getArtifact(), session);
+				artifactInstaller.install(parentArtifact.getFile(), parentArtifact, repository);
+			}
+
+			// finally the pom itself
+			Artifact pomArtifact = repositorySystem.createProjectArtifact(artifact.getGroupId(), artifact.getArtifactId(),
+					artifact.getVersion());
+			pomArtifact = resolveArtifact(pomArtifact, session);
+			artifactInstaller.install(pomArtifact.getFile(), pomArtifact, repository);
+		}
+
+		return notInstalled;
+	}
+
+	private List<DependencyNode> collectNodes(final List<DependencyNode> graphs, final DependencyNodeFilter selection,
+			final Set<Artifact> includes) {
+		DependencyNodeFilter filter = selection;
+		if (filter == null) {
+			filter = new DependencyNodeFilter() {
+				@Override
+				public boolean accept(final DependencyNode node) {
+					return true; // accept everything
+				}
+			};
+		}
+
+		CollectingDependencyNodeVisitor installing = new CollectingDependencyNodeVisitor();
+		for (DependencyNode graph : graphs) {
+			graph.accept(new FilteringDependencyNodeVisitor(installing, new DependencyNodeAncestorOrSelfArtifactFilter(filter)));
+		}
+
+		final Set<Artifact> artifacts = new HashSet<Artifact>();
+		for (DependencyNode node : installing.getNodes()) {
+			artifacts.add(node.getArtifact());
+		}
+		includes.addAll(artifacts);
+
+		List<DependencyNode> result = new ArrayList<DependencyNode>();
+		for (DependencyNode graph : graphs) {
+			BuildingDependencyNodeVisitor visitor = new BuildingDependencyNodeVisitor();
+			graph.accept(new FilteringDependencyNodeVisitor(visitor, new DependencyNodeFilter() {
+				@Override
+				public boolean accept(final DependencyNode node) {
+					return !artifacts.contains(node.getArtifact());
+				}
+			}));
+
+			if (visitor.getDependencyTree() != null) {
+				result.add(visitor.getDependencyTree());
+			}
+		}
+
+		return Collections.unmodifiableList(result);
+	}
+
+	private Artifact resolveArtifact(final Artifact toResolve, final MavenSession session) throws DependencyResolutionException {
+		// otherwise resolve through the normal means
+		ArtifactResolutionRequest request = new ArtifactResolutionRequest()
+				.setLocalRepository(session.getLocalRepository())
+				.setRemoteRepositories(session.getRequest().getRemoteRepositories())
+				.setMirrors(session.getSettings().getMirrors())
+				.setServers(session.getRequest().getServers())
+				.setProxies(session.getRequest().getProxies())
+				.setOffline(session.isOffline())
+				.setForceUpdate(session.getRequest().isUpdateSnapshots())
+				.setResolveRoot(true)
+				.setArtifact(toResolve);
+
+		ArtifactResolutionResult result = repositorySystem.resolve(request);
+		if (!result.isSuccess()) {
+			if (result.getExceptions() != null) {
+				for (Exception exception : result.getExceptions()) {
+					getLogger().error("Error resolving artifact " + toResolve, exception);
+				}
+			}
+			throw new DependencyResolutionException("Unable to resolve artifact " + toResolve);
+		}
+
+		return result.getArtifacts().iterator().next();
 	}
 }
