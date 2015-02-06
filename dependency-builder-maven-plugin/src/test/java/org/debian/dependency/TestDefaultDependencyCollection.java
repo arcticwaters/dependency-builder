@@ -50,7 +50,7 @@ import org.apache.maven.shared.dependency.graph.DependencyNode;
 import org.apache.maven.shared.dependency.graph.filter.DependencyNodeFilter;
 import org.apache.maven.shared.dependency.graph.internal.DefaultDependencyNode;
 import org.codehaus.plexus.logging.Logger;
-import org.hamcrest.CustomMatcher;
+import org.hamcrest.CustomTypeSafeMatcher;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -275,10 +275,9 @@ public class TestDefaultDependencyCollection {
 		when(badResult.isSuccess())
 				.thenReturn(false);
 		doReturn(badResult)
-				.when(repositorySystem).resolve(argThat(new CustomMatcher<ArtifactResolutionRequest>("parent artifact") {
+				.when(repositorySystem).resolve(argThat(new CustomTypeSafeMatcher<ArtifactResolutionRequest>("parent artifact") {
 					@Override
-					public boolean matches(final Object item) {
-						ArtifactResolutionRequest request = (ArtifactResolutionRequest) item;
+					public boolean matchesSafely(final ArtifactResolutionRequest request) {
 						return request.getArtifact().equals(parentArtifact);
 					}
 				}));
@@ -297,10 +296,9 @@ public class TestDefaultDependencyCollection {
 		when(badResult.isSuccess())
 				.thenReturn(false);
 		doReturn(badResult)
-				.when(repositorySystem).resolve(argThat(new CustomMatcher<ArtifactResolutionRequest>("parent artifact") {
+				.when(repositorySystem).resolve(argThat(new CustomTypeSafeMatcher<ArtifactResolutionRequest>("parent artifact") {
 					@Override
-					public boolean matches(final Object item) {
-						ArtifactResolutionRequest request = (ArtifactResolutionRequest) item;
+					public boolean matchesSafely(final ArtifactResolutionRequest request) {
 						return request.getArtifact().equals(pomArtifact);
 					}
 				}));
