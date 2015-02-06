@@ -20,8 +20,7 @@ import java.io.IOException;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
-import org.apache.maven.project.MavenProject;
-import org.eclipse.jgit.api.Git;
+import org.debian.dependency.sources.Source;
 
 /** Defines a means of building a particular project. */
 public interface SourceBuilder {
@@ -29,17 +28,17 @@ public interface SourceBuilder {
 	int PRIORITY_STEP = 100;
 
 	/**
-	 * Builds the {@link MavenProject} located under the given repository. It is not guaranteed that the project is in the root of
-	 * the given directory. Each returned artifact must set the artifact file appropriately: if given it is up to the caller to
-	 * install into the repository otherwise it is assumed to have been installed already.
+	 * Builds the project {@link Artifact} located within the given {@link Source}. The returned set of artifacts should include
+	 * any artifact built as part of building the given project artifact. Each <em>must</em> set the
+	 * {@link Artifact#setFile(File) file} of the artifact to be valid.
 	 *
-	 * @param project project to build
-	 * @param repository a non-bare git repository
-	 * @param localRepository repository that should be used for resolution
+	 * @param artifact artifact to build
+	 * @param source where the artifact should be built from
+	 * @param localRepository maven repository which can be used for local resolution
 	 * @return original artifact with any attached artifacts
 	 * @throws ArtifactBuildException in we are unable to build the artifact
 	 */
-	Set<Artifact> build(Artifact artifact, Git repository, File localRepository) throws ArtifactBuildException;
+	Set<Artifact> build(Artifact artifact, Source source, File localRepository) throws ArtifactBuildException;
 
 	/**
 	 * Gets the priority of this builder for the given directory. A small number (including zero) denotes a high priority. A

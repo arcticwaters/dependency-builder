@@ -22,7 +22,6 @@ import java.util.Enumeration;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
-import org.apache.commons.io.IOUtils;
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
 import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
@@ -102,7 +101,11 @@ public class JavaSourcesJarSourceRetrieval extends AbstractLogEnabled implements
 				}
 			}
 		} finally {
-			IOUtils.closeQuietly(jarFile);
+			try {
+				jarFile.close();
+			} catch (IOException e) {
+				getLogger().debug("Ignoring error when closing zip", e);
+			}
 		}
 		return jarFile;
 	}

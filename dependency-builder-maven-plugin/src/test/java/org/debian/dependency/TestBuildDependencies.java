@@ -15,62 +15,70 @@
  */
 package org.debian.dependency;
 
+import static org.hamcrest.CoreMatchers.hasItem;
+import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.hasSize;
+import static org.junit.Assert.assertThat;
+import static org.mockito.AdditionalAnswers.returnsFirstArg;
 import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.anyListOf;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.argThat;
 import static org.mockito.Matchers.eq;
-import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.DefaultArtifact;
-import org.apache.maven.artifact.installer.ArtifactInstaller;
+import org.apache.maven.artifact.InvalidRepositoryException;
+import org.apache.maven.artifact.installer.ArtifactInstallationException;
 import org.apache.maven.artifact.repository.ArtifactRepository;
-import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
-import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
 import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
 import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.Plugin;
 import org.apache.maven.plugin.Mojo;
 import org.apache.maven.plugin.MojoExecution;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
+import org.apache.maven.plugin.PluginParameterExpressionEvaluator;
 import org.apache.maven.plugin.testing.MojoRule;
-import org.apache.maven.plugin.testing.ResolverExpressionEvaluatorStub;
-import org.apache.maven.plugin.testing.stubs.ArtifactStub;
-import org.apache.maven.plugin.testing.stubs.DefaultArtifactHandlerStub;
 import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.ProjectBuilder;
-import org.apache.maven.project.ProjectBuildingRequest;
-import org.apache.maven.project.ProjectBuildingResult;
 import org.apache.maven.repository.RepositorySystem;
 import org.apache.maven.shared.dependency.graph.DependencyNode;
+import org.apache.maven.shared.dependency.graph.filter.DependencyNodeFilter;
 import org.apache.maven.shared.dependency.graph.internal.DefaultDependencyNode;
-import org.apache.maven.shared.dependency.graph.traversal.DependencyNodeVisitor;
-import org.codehaus.plexus.PlexusConstants;
+import org.apache.maven.shared.dependency.graph.traversal.BuildingDependencyNodeVisitor;
+import org.apache.maven.shared.dependency.graph.traversal.FilteringDependencyNodeVisitor;
 import org.codehaus.plexus.component.configurator.ComponentConfigurator;
 import org.codehaus.plexus.component.configurator.expression.ExpressionEvaluator;
 import org.codehaus.plexus.configuration.DefaultPlexusConfiguration;
 import org.codehaus.plexus.configuration.PlexusConfiguration;
+import org.codehaus.plexus.configuration.xml.XmlPlexusConfiguration;
+import org.codehaus.plexus.util.StringUtils;
 import org.debian.dependency.builders.ArtifactBuildException;
-import org.debian.dependency.builders.BuildSession;
-import org.debian.dependency.builders.BuildStrategy;
-import org.debian.dependency.matchers.ArtifactMatcher;
-import org.debian.dependency.matchers.DependencyNodeArtifactMatcher;
+import org.debian.dependency.builders.SourceBuilderManager;
+import org.debian.dependency.sources.Source;
+import org.debian.dependency.sources.SourceRetrievalException;
+import org.debian.dependency.sources.SourceRetrievalManager;
+import org.hamcrest.CustomTypeSafeMatcher;
+import org.hamcrest.Matcher;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
-import org.mockito.InOrder;
+import org.mockito.Answers;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.runners.MockitoJUnitRunner;
@@ -80,34 +88,143 @@ import org.mockito.stubbing.Answer;
 @RunWith(MockitoJUnitRunner.class)
 public class TestBuildDependencies {
 	@Rule
+	public TemporaryFolder tempFolder = new TemporaryFolder();
+	@Rule
 	public MojoRule mojoRule = new MojoRule();
 
-	@Mock
-	private DependencyCollector collector;
-	@Mock
-	private BuildStrategy buildStrategy;
-	@Mock
-	private BuildStrategy buildStrategy2;
-	@Mock
-	private ArtifactInstaller installer;
-	@Mock
-	private RepositorySystem repositorySystem;
-	@Mock
-	private ComponentConfigurator configurator;
-	@Mock
-	private ProjectBuilder projectBuilder;
+	@InjectMocks
+	private BuildDependencies configuredMojo = new BuildDependencies();
+	@InjectMocks
+	private BuildDependencies unconfiguredMojo = new BuildDependencies();
 
-	private BuildDependencies lookupConfiguredMojo() throws Exception {
-		return lookupConfiguredMojo(defaultConfiguration());
+	@Mock
+	private RepositorySystem repoSystem;
+	@Mock(answer = Answers.RETURNS_MOCKS)
+	private SourceRetrievalManager retrievalManager;
+	@Mock
+	private SourceBuilderManager builderManager;
+	@Mock
+	private DependencyCollection depCollection;
+
+	@Before
+	public void setUp() throws Exception {
+		configureMojo(configuredMojo, defaultConfiguration());
+
+		when(
+				depCollection.resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class),
+						any(MavenSession.class)))
+				.then(new Answer<DependencyNode>() {
+					@Override
+					public DependencyNode answer(final InvocationOnMock invocation) throws Throwable {
+						return createDependencyNode(null, (String) invocation.getArguments()[0], (String) invocation.getArguments()[1],
+								(String) invocation.getArguments()[2]);
+					}
+				});
+		when(
+				depCollection.resolveProjectDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class),
+						any(MavenSession.class)))
+				.then(new Answer<DependencyNode>() {
+					@Override
+					public DependencyNode answer(final InvocationOnMock invocation) throws Throwable {
+						return createDependencyNode(null, (String) invocation.getArguments()[0], (String) invocation.getArguments()[1],
+								(String) invocation.getArguments()[2]);
+					}
+				});
+		when(
+				depCollection.installDependencies(anyListOf(DependencyNode.class), any(DependencyNodeFilter.class),
+						any(ArtifactRepository.class),
+						any(MavenSession.class))).then(returnsFirstArg());
+
+		when(builderManager.build(any(Artifact.class), any(Source.class), any(File.class)))
+				.then(new Answer<Set<Artifact>>() {
+			@Override
+					public Set<Artifact> answer(final InvocationOnMock invocation) throws Throwable {
+						return Collections.singleton((Artifact) invocation.getArguments()[0]);
+			}
+		});
+
+		when(repoSystem.createProjectArtifact(anyString(), anyString(), anyString()))
+				.then(new Answer<Artifact>() {
+					@Override
+					public Artifact answer(final InvocationOnMock invocation) throws Throwable {
+						return mockArtifact((String) invocation.getArguments()[0], (String) invocation.getArguments()[1],
+								(String) invocation.getArguments()[2]);
+					}
+				});
 	}
 
-	private PlexusConfiguration defaultConfiguration() {
+	private void configureMojo(final Mojo mojo, final PlexusConfiguration config) throws Exception {
+		ComponentConfigurator configurator = mojoRule.getContainer().lookup(ComponentConfigurator.class, "basic");
+
+		MojoExecution execution = mojoRule.newMojoExecution("build-dependencies");
+		merge(new XmlPlexusConfiguration(execution.getConfiguration()), config);
+
+		MavenProject project = new MavenProject();
+		// only required so tests resolve ${project.build.directory}
+		project.getBuild().setDirectory(tempFolder.getRoot().getCanonicalPath());
+
+		ExpressionEvaluator evaluator = new PluginParameterExpressionEvaluator(mojoRule.newMavenSession(project), execution);
+		configurator.configureComponent(mojo, config, evaluator, mojoRule.getContainer().getContainerRealm());
+	}
+
+	private static Artifact mockArtifact(final String groupId, final String artifactId, final String version) {
+		StringBuilder builder = new StringBuilder();
+		if (groupId != null) {
+			builder.append(groupId);
+		}
+		builder.append(':');
+		if (artifactId != null) {
+			builder.append(artifactId);
+		}
+		builder.append(':');
+		if (version != null) {
+			builder.append(version);
+		}
+
+		Artifact artifact = mock(Artifact.class, builder.toString());
+		when(artifact.getGroupId())
+				.thenReturn(groupId);
+		when(artifact.getArtifactId())
+				.thenReturn(artifactId);
+		when(artifact.getVersion())
+				.thenReturn(version);
+		return artifact;
+	}
+
+	private static DependencyNode createDependencyNode(final DependencyNode parent, final String groupId, final String artifactId,
+			final String version) {
+		DefaultDependencyNode node = new DefaultDependencyNode(parent, mockArtifact(groupId, artifactId, version), null, null, null);
+		node.setChildren(new ArrayList<DependencyNode>());
+		if (parent != null) {
+			parent.getChildren().add(node);
+		}
+		return node;
+	}
+
+	private static Matcher<Artifact> matchesArtifact(final String groupId, final String artifactId, final String version) {
+		return new CustomTypeSafeMatcher<Artifact>("Artifact with specifier " + groupId + ":" + artifactId + ":" + version) {
+			@Override
+			protected boolean matchesSafely(final Artifact item) {
+				if (!StringUtils.isEmpty(groupId) && !groupId.equals(item.getGroupId())) {
+					return false;
+				} else if (!StringUtils.isEmpty(artifactId) && !artifactId.equals(item.getArtifactId())) {
+					return false;
+				} else if (!StringUtils.isEmpty(version) && !version.equals(item.getVersion())) {
+					return false;
+				}
+				return true;
+			}
+		};
+	}
+
+	private static PlexusConfiguration defaultConfiguration() {
 		DefaultPlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
 		config.addChild("artifact", "some:artifact");
+		config.addChild("multiProject", "true");
 		return config;
 	}
 
-	private void merge(final PlexusConfiguration from, final PlexusConfiguration to) {
+	private static void merge(final PlexusConfiguration from, final PlexusConfiguration to) {
 		PlexusConfiguration[] children = from.getChildren();
 		if (children == null) {
 			return;
@@ -119,485 +236,392 @@ public class TestBuildDependencies {
 		}
 	}
 
-	private BuildDependencies lookupConfiguredMojo(final PlexusConfiguration config) throws Exception {
-		merge(defaultConfiguration(), config);
-
-		MavenProject project = new MavenProject();
-		MavenSession session = mojoRule.newMavenSession(project);
-		MojoExecution execution = mojoRule.newMojoExecution("build-dependencies");
-
-		// need to set this up for plugin dependencies
-		execution.getMojoDescriptor().getPluginDescriptor().setPlugin(new Plugin());
-
-		Mojo mojo = mojoRule.lookupConfiguredMojo(session, execution);
-
-		ExpressionEvaluator evaluator = new ResolverExpressionEvaluatorStub();
-		configurator.configureComponent(mojo, config, evaluator, mojoRule.getContainer().getContainerRealm());
-
-		BuildDependencies buildDependenciesMojo = (BuildDependencies) mojo;
-		buildDependenciesMojo.setBuildStrategies(Arrays.asList(buildStrategy, buildStrategy2));
-		return buildDependenciesMojo;
-	}
-
-	@Before
-	public void setUp() throws Exception {
-		configurator = mojoRule.getContainer().lookup(ComponentConfigurator.class, "basic");
-
-		mojoRule.getContainer().addComponent(collector, DependencyCollector.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
-		mojoRule.getContainer().addComponent(buildStrategy, BuildStrategy.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
-		mojoRule.getContainer().addComponent(buildStrategy2, BuildStrategy.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
-		mojoRule.getContainer().addComponent(installer, ArtifactInstaller.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
-		mojoRule.getContainer().addComponent(repositorySystem, RepositorySystem.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
-		mojoRule.getContainer().addComponent(projectBuilder, ProjectBuilder.class, PlexusConstants.PLEXUS_DEFAULT_HINT);
-
-		when(repositorySystem.createProjectArtifact(anyString(), anyString(), anyString()))
-				.then(new Answer<Artifact>() {
-					@Override
-					public Artifact answer(final InvocationOnMock invocation) throws Throwable {
-						Object[] args = invocation.getArguments();
-						Artifact result = new ArtifactStub();
-						result.setGroupId((String) args[0]);
-						result.setArtifactId((String) args[1]);
-						result.setVersion((String) args[2]);
-						return result;
-					}
-				});
-		when(repositorySystem.resolve(any(ArtifactResolutionRequest.class)))
-				.then(new Answer<ArtifactResolutionResult>() {
-					@Override
-					public ArtifactResolutionResult answer(final InvocationOnMock invocation) throws Throwable {
-						ArtifactResolutionRequest request = (ArtifactResolutionRequest) invocation.getArguments()[0];
-						ArtifactResolutionResult result = new ArtifactResolutionResult();
-						result.setArtifacts(Collections.singleton(request.getArtifact()));
-						return result;
-					}
-				});
-
-		ProjectBuildingResult projectBuilingResult = mock(ProjectBuildingResult.class);
-		when(projectBuilingResult.getProject()).thenReturn(new MavenProject());
-		when(projectBuilder.build(any(Artifact.class), any(ProjectBuildingRequest.class)))
-				.thenReturn(projectBuilingResult);
-	}
-
-	private DependencyNode createNode(final DependencyNode parent, final String groupId, final String artifactId, final String version) {
-		Artifact artifact = new DefaultArtifact(groupId, artifactId, version, Artifact.SCOPE_RUNTIME, "jar", "",
-				new DefaultArtifactHandlerStub("jar"));
-
-		DefaultDependencyNode graph = new DefaultDependencyNode(parent, artifact, null, null, null);
-		graph.setChildren(new ArrayList<DependencyNode>());
-		if (parent != null) {
-			parent.getChildren().add(graph);
-		}
-
-		return graph;
-	}
-
-	@Test(expected = MojoExecutionException.class)
-	public void testOnlyReferencingArtifacts() throws Exception {
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
-		config.addChild("artifact", "some:artifact:{referencing:artifact}");
-
-		lookupConfiguredMojo(config).execute();
-	}
-
-	@Test(expected = MojoFailureException.class)
-	public void testStrategyBuildsNothing() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
-		DependencyNode child1 = createNode(root, "children", "child1", "1");
-		createNode(child1, "grandchildren", "child1child", "1");
-		DependencyNode child2 = createNode(root, "children", "child2", "1");
-		createNode(child2, "grandchildren", "child2child", "1");
-
-		when(collector.resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(Collections.singleton(root.getArtifact()));
-
-		lookupConfiguredMojo().execute();
-	}
-
-	@Test(expected = MojoFailureException.class)
-	public void testStrategyBuildsSomeArtifacts() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
-		DependencyNode child1 = createNode(root, "children", "child1", "1");
-		createNode(child1, "grandchildren", "child1child", "1");
-		DependencyNode child2 = createNode(root, "children", "child2", "1");
-		createNode(child2, "grandchildren", "child2child", "1");
-
-		when(collector.resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(Collections.singleton(root.getArtifact()));
-
-		lookupConfiguredMojo().execute();
-	}
-
+	/** We should be able to configure just a single artifact. */
 	@Test
-	public void testStrategyBuildsAllArtifacts() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
-		DependencyNode child1 = createNode(root, "children", "child1", "1");
-		createNode(child1, "grandchildren", "child1child", "1");
-		DependencyNode child2 = createNode(root, "children", "child2", "1");
-		createNode(child2, "grandchildren", "child2child", "1");
-
-		when(collector.resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(toArtifactSet(root));
-
-		lookupConfiguredMojo().execute();
-
-		verify(buildStrategy).build(argThat(new DependencyNodeArtifactMatcher(root)), any(BuildSession.class));
-	}
-
-	@Test
-	public void testArtifactsDirectIgnored() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
-		DependencyNode child1 = createNode(root, "children", "child1", "1");
-		DependencyNode child1child = createNode(child1, "grandchildren", "child1child", "1");
-		DependencyNode child2 = createNode(root, "children", "child2", "1");
-		createNode(child2, "grandchildren", "child2child", "1");
-
-		DependencyNode toBuild = createNode(null, "root", "root", "1");
-		DependencyNode toBuildChild = createNode(toBuild, "children", "child2", "1");
-		createNode(toBuildChild, "grandchildren", "child2child", "1");
-
-		when(collector.resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(toArtifactSet(toBuild));
-
-		PlexusConfiguration ignoreArtifactsIncludes = new DefaultPlexusConfiguration("includes");
-		ignoreArtifactsIncludes.addChild("include", "*:child1");
-		PlexusConfiguration ignoreArtifacts = new DefaultPlexusConfiguration("ignoreArtifacts");
-		ignoreArtifacts.addChild(ignoreArtifactsIncludes);
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
-		config.addChild(ignoreArtifacts);
-
-		lookupConfiguredMojo(config).execute();
-
-		verify(buildStrategy).build(argThat(new DependencyNodeArtifactMatcher(toBuild)), any(BuildSession.class));
-		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(child1.getArtifact())), any(ArtifactRepository.class));
-		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(child1child.getArtifact())), any(ArtifactRepository.class));
-	}
-
-	@Test
-	public void testArtifactsDirectAndIndirectIgnored() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
-		DependencyNode child1 = createNode(root, "children", "child1", "1");
-		DependencyNode child1child = createNode(child1, "grandchildren", "child1child", "1");
-		DependencyNode child2 = createNode(root, "children", "child2", "1");
-		DependencyNode child2child = createNode(child2, "grandchildren", "child1", "1");
-		DependencyNode child2childchild = createNode(child2child, "greatgrandchildren", "child2", "1");
-
-		DependencyNode toBuild = createNode(null, "root", "root", "1");
-		createNode(toBuild, "children", "child2", "1");
-
-		when(collector.resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(toArtifactSet(toBuild));
-
-		PlexusConfiguration ignoreArtifactsIncludes = new DefaultPlexusConfiguration("includes");
-		ignoreArtifactsIncludes.addChild("include", "*:child1");
-		PlexusConfiguration ignoreArtifacts = new DefaultPlexusConfiguration("ignoreArtifacts");
-		ignoreArtifacts.addChild(ignoreArtifactsIncludes);
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
-		config.addChild(ignoreArtifacts);
-
-		lookupConfiguredMojo(config).execute();
-
-		verify(buildStrategy).build(argThat(new DependencyNodeArtifactMatcher(toBuild)), any(BuildSession.class));
-		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(child1.getArtifact())), any(ArtifactRepository.class));
-		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(child1child.getArtifact())), any(ArtifactRepository.class));
-		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(child2child.getArtifact())), any(ArtifactRepository.class));
-		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(child2childchild.getArtifact())),
-				any(ArtifactRepository.class));
-	}
-
-	@Test
-	public void testMavenPluginsIgnoredByDefault() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
-		DependencyNode child1 = createNode(root, "org.apache.maven.plugins", "maven-compiler-plugin", "1");
-		DependencyNode child1child = createNode(child1, "org.apache.maven", "maven-plugin-api", "1");
-		DependencyNode child2 = createNode(root, "children", "child2", "1");
-		createNode(child2, "grandchildren", "child2child", "1");
-
-		DependencyNode toBuild = createNode(null, "root", "root", "1");
-		DependencyNode toBuildChild = createNode(toBuild, "children", "child2", "1");
-		createNode(toBuildChild, "grandchildren", "child2child", "1");
-
-		when(collector.resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(toArtifactSet(root));
-
-		lookupConfiguredMojo().execute();
-
-		verify(buildStrategy).build(argThat(new DependencyNodeArtifactMatcher(toBuild)), any(BuildSession.class));
-		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(child1.getArtifact())), any(ArtifactRepository.class));
-		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(child1child.getArtifact())), any(ArtifactRepository.class));
-	}
-
-	@Test
-	public void testMavenPluginsIgnoredWithCustomIgnore() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
-		DependencyNode child1 = createNode(root, "org.apache.maven.plugins", "maven-compiler-plugin", "1");
-		DependencyNode child1child = createNode(child1, "org.apache.maven", "maven-plugin-api", "1");
-		DependencyNode child2 = createNode(root, "children", "child2", "1");
-		DependencyNode child2child = createNode(child2, "grandchildren", "child2child", "1");
-
-		DependencyNode toBuild = createNode(null, "root", "root", "1");
-
-		when(collector.resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(toArtifactSet(root));
-
-		PlexusConfiguration ignoreArtifactsIncludes = new DefaultPlexusConfiguration("includes");
-		ignoreArtifactsIncludes.addChild("include", "*:*child*");
-		PlexusConfiguration ignoreArtifacts = new DefaultPlexusConfiguration("ignoreArtifacts");
-		ignoreArtifacts.addChild(ignoreArtifactsIncludes);
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
-		config.addChild(ignoreArtifacts);
-
-		lookupConfiguredMojo(config).execute();
-
-		verify(buildStrategy).build(argThat(new DependencyNodeArtifactMatcher(toBuild)), any(BuildSession.class));
-		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(child1.getArtifact())), any(ArtifactRepository.class));
-		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(child1child.getArtifact())), any(ArtifactRepository.class));
-		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(child2.getArtifact())), any(ArtifactRepository.class));
-		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(child2child.getArtifact())), any(ArtifactRepository.class));
-	}
-
-	@Test
-	public void testGivenArtifactBuilt() throws Exception {
-		DependencyNode root = createNode(null, "some", "artifact", "1");
-
-		when(collector.resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(toArtifactSet(root));
-
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
+	public void testSingleArtifact() throws Exception {
+		PlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
 		config.addChild("artifact", "some:artifact");
+		configureMojo(unconfiguredMojo, config);
 
-		lookupConfiguredMojo(config).execute();
+		unconfiguredMojo.execute();
 
-		verify(buildStrategy).build(argThat(new DependencyNodeArtifactMatcher(root)), any(BuildSession.class));
-		verify(collector).resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class),
-				any(MavenSession.class));
+		verify(retrievalManager).checkoutSource(argThat(matchesArtifact("some", "artifact", null)), any(File.class), any(MavenSession.class));
+		verify(builderManager).build(argThat(matchesArtifact("some", "artifact", null)), any(Source.class), any(File.class));
 	}
 
+	/** We should be able to configure multiple artifacts if necessary. */
 	@Test
-	public void testGivenArtifactWithVersionBuilt() throws Exception {
-		DependencyNode root = createNode(null, "some", "artifact", "4.0");
+	@SuppressWarnings("unchecked")
+	public void testArtifactSet() throws Exception {
+		PlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
+		config.getChild("artifacts").addChild("artifact", "some:artifact1");
+		config.getChild("artifacts").addChild("artifact", "some:artifact2");
+		config.addChild("multiProject", "true");
+		configureMojo(unconfiguredMojo, config);
 
-		when(collector.resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(toArtifactSet(root));
+		unconfiguredMojo.execute();
 
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
-		config.addChild("artifact", "some:artifact:4.0");
+		ArgumentCaptor<Artifact> retrievalArtifacts = ArgumentCaptor.forClass(Artifact.class);
+		ArgumentCaptor<Artifact> buildArtifacts = ArgumentCaptor.forClass(Artifact.class);
+		verify(retrievalManager, times(2)).checkoutSource(retrievalArtifacts.capture(), any(File.class), any(MavenSession.class));
+		verify(builderManager, times(2)).build(buildArtifacts.capture(), any(Source.class), any(File.class));
 
-		lookupConfiguredMojo(config).execute();
-
-		verify(buildStrategy).build(argThat(new DependencyNodeArtifactMatcher(root)), any(BuildSession.class));
-		verify(collector).resolveBuildDependencies(eq("some"), eq("artifact"), eq("4.0"), any(ArtifactFilter.class),
-				any(MavenSession.class));
+		assertThat(buildArtifacts.getAllValues(), hasSize(2));
+		assertThat(buildArtifacts.getAllValues(),
+				containsInAnyOrder(matchesArtifact("some", "artifact1", null), matchesArtifact("some", "artifact2", null)));
+		assertThat(retrievalArtifacts.getAllValues(), hasSize(2));
+		assertThat(buildArtifacts.getAllValues(),
+				containsInAnyOrder(matchesArtifact("some", "artifact1", null), matchesArtifact("some", "artifact2", null)));
 	}
 
+	/** If both a single artifact and the artifact set are specified, both are built. */
 	@Test
-	public void testArtifactToBuildIgnored() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
+	@SuppressWarnings("unchecked")
+	public void testSingleArtifactAndAritfactSet() throws Exception {
+		PlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
+		config.addChild("artifact", "some:artifact1");
+		config.getChild("artifacts").addChild("artifact", "some:artifact2");
+		config.addChild("multiProject", "true");
+		configureMojo(unconfiguredMojo, config);
 
-		when(collector.resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(collector.resolveProjectDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class),
+		unconfiguredMojo.execute();
+
+		ArgumentCaptor<Artifact> retrievalArtifacts = ArgumentCaptor.forClass(Artifact.class);
+		ArgumentCaptor<Artifact> buildArtifacts = ArgumentCaptor.forClass(Artifact.class);
+		verify(retrievalManager, times(2)).checkoutSource(retrievalArtifacts.capture(), any(File.class), any(MavenSession.class));
+		verify(builderManager, times(2)).build(buildArtifacts.capture(), any(Source.class), any(File.class));
+
+		assertThat(retrievalArtifacts.getAllValues(),
+				containsInAnyOrder(matchesArtifact("some", "artifact1", null), matchesArtifact("some", "artifact2", null)));
+		assertThat(buildArtifacts.getAllValues(),
+				containsInAnyOrder(matchesArtifact("some", "artifact1", null), matchesArtifact("some", "artifact2", null)));
+	}
+
+	/** we must ensure at least 1 artifact is provided. */
+	@Test(expected = MojoFailureException.class)
+	public void testNoArtifacts() throws Exception {
+		PlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
+		configureMojo(unconfiguredMojo, config);
+
+		unconfiguredMojo.execute();
+	}
+
+	/** We should be able to reference versions of other artifacts. Use case: implicit dependencies from surefire. */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testVersionReferencingArtifacts() throws Exception {
+		PlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
+		config.getChild("artifacts").addChild("artifact", "some:artifact:version");
+		config.getChild("artifacts").addChild("artifact", "another:artifact:{some:artifact}");
+		config.addChild("multiProject", "true");
+		configureMojo(unconfiguredMojo, config);
+
+		unconfiguredMojo.execute();
+
+		ArgumentCaptor<Artifact> retrievalArtifacts = ArgumentCaptor.forClass(Artifact.class);
+		ArgumentCaptor<Artifact> buildArtifacts = ArgumentCaptor.forClass(Artifact.class);
+		verify(retrievalManager, times(2)).checkoutSource(retrievalArtifacts.capture(), any(File.class), any(MavenSession.class));
+		verify(builderManager, times(2)).build(buildArtifacts.capture(), any(Source.class), any(File.class));
+
+		assertThat(retrievalArtifacts.getAllValues(),
+				containsInAnyOrder(matchesArtifact("some", "artifact", "version"), matchesArtifact("another", "artifact", "version")));
+		assertThat(buildArtifacts.getAllValues(),
+				containsInAnyOrder(matchesArtifact("some", "artifact", "version"), matchesArtifact("another", "artifact", "version")));
+	}
+
+	/** When there are only version referencing artifacts, we should bail. */
+	@Test(expected = MojoFailureException.class)
+	public void testOnlyVersionReferencingArtifact() throws Exception {
+		PlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
+		config.addChild("artifact", "some:artifact:{another:artifact}");
+		configureMojo(unconfiguredMojo, config);
+
+		unconfiguredMojo.execute();
+	}
+
+	/** Maven plugins will generally be needed as build dependencies, unless explicitly required, they should be ignored. */
+	@Test
+	public void testMavenPluginIgnoredDefault() throws Exception {
+		configuredMojo.execute();
+
+		verify(depCollection).installDependencies(anyListOf(DependencyNode.class),
+				argThat(new CustomTypeSafeMatcher<DependencyNodeFilter>("Maven plugins ignored") {
+					@Override
+					protected boolean matchesSafely(final DependencyNodeFilter item) {
+						return item.accept(createDependencyNode(null, "org.apache.maven.plugins", "maven-compiler", "some-version"));
+					}
+				}), any(ArtifactRepository.class), any(MavenSession.class));
+	}
+
+	/**
+	 * Surefire dynamically adds dependencies depending on which unit testing framework you have as a dependency. Since we ignore
+	 * maven plugins by default, these implicit dependencies should be ignored as well.
+	 */
+	@Test
+	public void testSurefireImplicitPluginsDefaultIgnored() throws Exception {
+		configuredMojo.execute();
+
+		verify(depCollection).installDependencies(anyListOf(DependencyNode.class),
+				argThat(new CustomTypeSafeMatcher<DependencyNodeFilter>("Maven plugins ignored") {
+					@Override
+					protected boolean matchesSafely(final DependencyNodeFilter item) {
+						return item.accept(createDependencyNode(null, "org.apache.maven.surefire", "surefire-junit4", "some-version"));
+					}
+				}), any(ArtifactRepository.class), any(MavenSession.class));
+	}
+
+	/**
+	 * Surefire dynamically adds dependencies depending on which unit testing framework you have as a dependency. These artifacts
+	 * should be dynamically added to the set of artifacts to be built.
+	 */
+	@Test
+	public void testSurefireImplictPlugins() throws Exception {
+		doAnswer(new Answer<DependencyNode>() {
+			@Override
+			public DependencyNode answer(final InvocationOnMock invocation) throws Throwable {
+				DependencyNode root = createDependencyNode(null, (String) invocation.getArguments()[0], (String) invocation.getArguments()[1],
+						(String) invocation.getArguments()[2]);
+				createDependencyNode(root, "org.apache.maven.plugins", "maven-surefire-plugin", "some-version");
+				return root;
+			}
+		}).when(depCollection).resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class), any(MavenSession.class));
+
+		configuredMojo.execute();
+
+		ArgumentCaptor<Artifact> captor = ArgumentCaptor.forClass(Artifact.class);
+		verify(builderManager, atLeast(2)).build(captor.capture(), any(Source.class), any(File.class));
+
+		assertThat(captor.getAllValues(), hasItem(matchesArtifact("org.apache.maven.surefire", "surefire-junit3", "some-version")));
+		assertThat(captor.getAllValues(), hasItem(matchesArtifact("org.apache.maven.surefire", "surefire-junit4", "some-version")));
+		assertThat(captor.getAllValues(), hasItem(matchesArtifact("org.apache.maven.surefire", "surefire-junit47", "some-version")));
+		assertThat(captor.getAllValues(), hasItem(matchesArtifact("org.apache.maven.surefire", "surefire-testng", "some-version")));
+	}
+
+	/** We should be able to turn off ignores if we don't want them, especially default ignores. */
+	@Test
+	public void testIgnoreExclude() throws Exception {
+		PlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
+		config.addChild("artifact", "org.apache.maven.plugins:maven-compiler-plugin");
+		config.getChild("ignores").getChild("includes").addChild("include", "org.apache.maven.plugins");
+		config.getChild("ignores").getChild("excludes").addChild("exclude", "org.apache.maven.plugins");
+		configureMojo(unconfiguredMojo, config);
+
+		unconfiguredMojo.execute();
+
+		verify(retrievalManager).checkoutSource(argThat(matchesArtifact("org.apache.maven.plugins", "maven-compiler-plugin", null)), any(File.class),
+				any(MavenSession.class));
+		verify(builderManager).build(argThat(matchesArtifact("org.apache.maven.plugins", "maven-compiler-plugin", null)), any(Source.class),
+				any(File.class));
+	}
+
+	/**
+	 * We should be able to ignore some of a projects dependencies. This should include any dependency under the ignored one as
+	 * well.
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testIgnoredDependencies() throws Exception {
+		doAnswer(new Answer<DependencyNode>() {
+			@Override
+			public DependencyNode answer(final InvocationOnMock invocation) throws Throwable {
+				DependencyNode root = createDependencyNode(null, (String) invocation.getArguments()[0], (String) invocation.getArguments()[1],
+						(String) invocation.getArguments()[2]);
+
+				DependencyNode child1 = createDependencyNode(root, "ignored", "child", "version");
+				createDependencyNode(child1, "ignored", "grandchild", "version");
+
+				createDependencyNode(root, "another", "child", "version");
+				return root;
+			}
+		}).when(depCollection).resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class),
+				any(MavenSession.class));
+		when(
+				depCollection.installDependencies(anyListOf(DependencyNode.class), any(DependencyNodeFilter.class), any(ArtifactRepository.class),
 						any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(toArtifactSet(root));
-
-		PlexusConfiguration ignoreArtifactsIncludes = new DefaultPlexusConfiguration("includes");
-		ignoreArtifactsIncludes.addChild("include", "some:artifact");
-		PlexusConfiguration ignoreArtifacts = new DefaultPlexusConfiguration("ignoreArtifacts");
-		ignoreArtifacts.addChild(ignoreArtifactsIncludes);
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
-		config.addChild(ignoreArtifacts);
-		config.addChild("artifact", "some:artifact");
-
-		lookupConfiguredMojo(config).execute();
-
-		// we should always build the given artifact even if its ignored
-		verify(buildStrategy).build(argThat(new DependencyNodeArtifactMatcher(root)), any(BuildSession.class));
-	}
-
-	@Test
-	public void testImplicitSurefireDependencies() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
-		DependencyNode surefireNode = createNode(root, "org.apache.maven.plugins", "surefire-maven-plugin", "2.3");
-
-		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(toArtifactSet(root));
-		when(collector.resolveProjectDependencies(eq("org.apache.maven.plugins"), eq("surefire-maven-plugin"), eq("2.3"),
-				any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(surefireNode);
-		when(collector.resolveBuildDependencies(eq("org.apache.maven.surefire"), any(String.class), eq("2.3"),
-				any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenAnswer(new Answer<DependencyNode>() {
+				.thenAnswer(new Answer<List<DependencyNode>>() {
 					@Override
-					public DependencyNode answer(final InvocationOnMock invocation) throws Throwable {
-						Object[] args = invocation.getArguments();
-						return createNode(null, args[0].toString(), args[1].toString(), args[2].toString());
+					public List<DependencyNode> answer(final InvocationOnMock invocation) throws Throwable {
+						List<DependencyNode> result = new ArrayList<DependencyNode>();
+
+						for (DependencyNode node : (List<DependencyNode>) invocation.getArguments()[0]) {
+							BuildingDependencyNodeVisitor visitor = new BuildingDependencyNodeVisitor();
+							FilteringDependencyNodeVisitor filter = new FilteringDependencyNodeVisitor(visitor, new DependencyNodeFilter() {
+								@Override
+								public boolean accept(final DependencyNode node) {
+									return !"ignored".equals(node.getArtifact().getGroupId());
+								}
+							});
+							node.accept(filter);
+							result.add(visitor.getDependencyTree());
+						}
+
+						return result;
 					}
 				});
 
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
-		config.addChild("artifact", "some:artifact");
+		configuredMojo.execute();
 
-		lookupConfiguredMojo(config).execute();
+		ArgumentCaptor<Artifact> buildArtifacts = ArgumentCaptor.forClass(Artifact.class);
+		verify(builderManager, times(2)).build(buildArtifacts.capture(), any(Source.class), any(File.class));
 
-		verify(installer).install(any(File.class), argThat(new ArtifactMatcher(surefireNode.getArtifact())), any(ArtifactRepository.class));
+		assertThat(buildArtifacts.getAllValues(),
+				containsInAnyOrder(matchesArtifact("some", "artifact", null), matchesArtifact("another", "child", null)));
+
+		verify(builderManager, never()).build(argThat(matchesArtifact("group", "child", "version")), any(Source.class), any(File.class));
+		verify(builderManager, never()).build(argThat(matchesArtifact("group", "grandchild", "version")), any(Source.class), any(File.class));
 	}
 
-	@Test
-	public void testMultipleArtifacts() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
-		DependencyNode fooNode = createNode(null, "foo", "bar", "baz");
-
-		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(toArtifactSet(root, fooNode));
-		when(collector.resolveBuildDependencies(eq("foo"), eq("bar"), eq("baz"), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(fooNode);
-
-		PlexusConfiguration artifacts = new DefaultPlexusConfiguration("artifacts");
-		artifacts.addChild("artifact", "foo:bar:baz");
-		artifacts.addChild("artifact", "some:artifact");
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
-		config.addChild(artifacts);
-
-		lookupConfiguredMojo(config).execute();
-	}
-
+	/** We should hiccup if a user inadvertently ignores all artifacts. */
 	@Test(expected = MojoFailureException.class)
-	public void testArtifactNotBuilt() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
-
-		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(null);
-
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
+	public void testIgnoreAllArtifacts() throws Exception {
+		PlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
 		config.addChild("artifact", "some:artifact");
+		config.getChild("ignores").getChild("includes").addChild("include", "some:artifact");
+		configureMojo(unconfiguredMojo, config);
 
-		lookupConfiguredMojo(config).execute();
+		when(depCollection.installDependencies(anyListOf(DependencyNode.class), any(DependencyNodeFilter.class), any(ArtifactRepository.class),
+				any(MavenSession.class)))
+				.thenReturn(Collections.<DependencyNode> emptyList());
+
+		unconfiguredMojo.execute();
+
+		verify(depCollection).installDependencies(anyListOf(DependencyNode.class),
+				argThat(new CustomTypeSafeMatcher<DependencyNodeFilter>("Ignore artifact") {
+					@Override
+					protected boolean matchesSafely(final DependencyNodeFilter item) {
+						return item.accept(createDependencyNode(null, "some", "artifact", null));
+					}
+				}), any(ArtifactRepository.class),
+				any(MavenSession.class));
 	}
 
+	/** The source that was checked out should be used for building. */
 	@Test
-	public void testMultipleArtifactsMultiProject() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
-		DependencyNode child = createNode(root, "child", "child", "1");
+	public void testCheckedoutSourceIsBuilt() throws Exception {
+		File workDir = tempFolder.newFolder();
+		File outputDir = tempFolder.newFolder();
 
-		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(argThat(new DependencyNodeArtifactMatcher(root)), any(BuildSession.class)))
-				.thenReturn(Collections.singleton(root.getArtifact()));
-		when(buildStrategy.build(argThat(new DependencyNodeArtifactMatcher(child)), any(BuildSession.class)))
-				.thenReturn(Collections.singleton(child.getArtifact()));
+		PlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
+		config.addChild("artifact", "some:artifact");
+		config.addChild("workDirectory", workDir.getCanonicalPath());
+		config.addChild("outputDirectory", outputDir.getCanonicalPath());
+		configureMojo(unconfiguredMojo, config);
 
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
+		Source source = mock(Source.class);
+		when(
+				retrievalManager.checkoutSource(argThat(matchesArtifact("some", "artifact", null)), eq(workDir.getAbsoluteFile()),
+						any(MavenSession.class)))
+				.thenReturn(source);
+		when(builderManager.build(any(Artifact.class), any(Source.class), any(File.class)))
+				.then(new Answer<Set<Artifact>>() {
+					@Override
+					public Set<Artifact> answer(final InvocationOnMock invocation) throws Throwable {
+						return Collections.singleton((Artifact) invocation.getArguments()[0]);
+					}
+				});
+
+		unconfiguredMojo.execute();
+
+		verify(retrievalManager).checkoutSource(argThat(matchesArtifact("some", "artifact", null)), any(File.class), any(MavenSession.class));
+		verify(builderManager).build(argThat(matchesArtifact("some", "artifact", null)), eq(source), eq(outputDir.getCanonicalFile()));
+	}
+
+	/** When multiproject is set, we should still be able to build a single artifact. */
+	@Test
+	public void testMultiprojectWithSingleArtifact() throws Exception {
+		PlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
 		config.addChild("artifact", "some:artifact");
 		config.addChild("multiProject", "true");
+		configureMojo(unconfiguredMojo, config);
 
-		lookupConfiguredMojo(config).execute();
+		unconfiguredMojo.execute();
+
+		verify(retrievalManager).checkoutSource(argThat(matchesArtifact("some", "artifact", null)), any(File.class), any(MavenSession.class));
+		verify(builderManager).build(argThat(matchesArtifact("some", "artifact", null)), any(Source.class), any(File.class));
 	}
 
-	@Test
-	public void testStrategy1Fails() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
+	/** If there are multiple artifacts to be built, but without multiproject set, we should bail. */
+	@Test(expected = MojoFailureException.class)
+	public void testNotMultipleWithMultipleArtifacts() throws Exception {
+		PlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
+		config.addChild("multiProject", "false");
+		config.getChild("artifacts").addChild("artifact", "first:artifact");
+		config.getChild("artifacts").addChild("artifact", "second:artifact");
+		configureMojo(unconfiguredMojo, config);
 
-		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
+		unconfiguredMojo.execute();
+	}
+
+	/** Artifacts with dependencies are treated the same as multiple artifacts: if we don't want to build all projects, we bail. */
+	@Test(expected = MojoFailureException.class)
+	public void testNotMultipleWithArtifactDependencies() throws Exception {
+		doAnswer(new Answer<DependencyNode>() {
+			@Override
+			public DependencyNode answer(final InvocationOnMock invocation) throws Throwable {
+				DependencyNode root = createDependencyNode(null, (String) invocation.getArguments()[0], (String) invocation.getArguments()[1],
+						(String) invocation.getArguments()[2]);
+				createDependencyNode(root, "group", "child", "version");
+				return root;
+			}
+		}).when(depCollection).resolveBuildDependencies(anyString(), anyString(), anyString(), any(ArtifactFilter.class),
+				any(MavenSession.class));
+
+		PlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
+		config.getChild("multiProject").setValue("false");
+		config.getChild("artifact").setValue("some:artifact");
+		configureMojo(unconfiguredMojo, config);
+
+		unconfiguredMojo.execute();
+	}
+
+	/** We should bubble up errors if we cannot create an output maven repository. */
+	@SuppressWarnings("unchecked")
+	@Test(expected = MojoExecutionException.class)
+	public void testCannotCreateLocalRepository() throws Exception {
+		when(repoSystem.createLocalRepository(any(File.class)))
+				.thenThrow(InvalidRepositoryException.class);
+
+		configuredMojo.execute();
+	}
+
+	/** If we cannot resolve an artifact when installing ignored artifacts, errors should bubble up. */
+	@Test(expected = MojoExecutionException.class)
+	public void testInstallIgnoreResolutionErrors() throws Exception {
+		when(
+				depCollection.installDependencies(anyListOf(DependencyNode.class), any(DependencyNodeFilter.class),
+						any(ArtifactRepository.class), any(MavenSession.class)))
+				.thenThrow(new DependencyResolutionException());
+
+		configuredMojo.execute();
+	}
+
+	/** Errors when installing ignored artifacts should bubble up. */
+	@SuppressWarnings("unchecked")
+	@Test(expected = MojoExecutionException.class)
+	public void testInstallIgnoreInstallErrors() throws Exception {
+		when(
+				depCollection.installDependencies(anyListOf(DependencyNode.class), any(DependencyNodeFilter.class),
+						any(ArtifactRepository.class), any(MavenSession.class)))
+				.thenThrow(ArtifactInstallationException.class);
+
+		configuredMojo.execute();
+	}
+
+	/** Errors from checking out source should bubble up. */
+	@Test(expected = MojoExecutionException.class)
+	public void testCheckoutSourceError() throws Exception {
+		when(retrievalManager.checkoutSource(any(Artifact.class), any(File.class), any(MavenSession.class)))
+				.thenThrow(new SourceRetrievalException());
+
+		configuredMojo.execute();
+	}
+
+	/** Errors from building source should bubble up. */
+	@Test(expected = MojoExecutionException.class)
+	public void testBuildErrors() throws Exception {
+		when(builderManager.build(any(Artifact.class), any(Source.class), any(File.class)))
 				.thenThrow(new ArtifactBuildException());
-		when(buildStrategy2.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(Collections.singleton(root.getArtifact()));
 
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
-		config.addChild("artifact", "some:artifact");
-
-		lookupConfiguredMojo(config).execute();
-	}
-
-	@Test
-	public void testStrategy1DoesntBuild() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
-
-		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(null);
-		when(buildStrategy2.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(Collections.singleton(root.getArtifact()));
-
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
-		config.addChild("artifact", "some:artifact");
-
-		lookupConfiguredMojo(config).execute();
-	}
-
-	@Test
-	public void testHigherPriorityStrategyBuiltFirst() throws Exception {
-		DependencyNode root = createNode(null, "root", "root", "1");
-
-		final int lowPriority = 5000;
-		final int highPriority = 100;
-
-		when(buildStrategy.getPriority())
-				.thenReturn(lowPriority);
-		when(buildStrategy2.getPriority())
-				.thenReturn(highPriority);
-
-		when(collector.resolveBuildDependencies(eq("some"), eq("artifact"), anyString(), any(ArtifactFilter.class), any(MavenSession.class)))
-				.thenReturn(root);
-		when(buildStrategy.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(Collections.singleton(root.getArtifact()));
-		when(buildStrategy2.build(any(DependencyNode.class), any(BuildSession.class)))
-				.thenReturn(null);
-
-		PlexusConfiguration config = new DefaultPlexusConfiguration(null);
-		config.addChild("artifact", "some:artifact");
-
-		lookupConfiguredMojo(config).execute();
-
-		InOrder order = inOrder(buildStrategy, buildStrategy2);
-		order.verify(buildStrategy2).build(any(DependencyNode.class), any(BuildSession.class));
-		order.verify(buildStrategy).build(any(DependencyNode.class), any(BuildSession.class));
-	}
-
-	private Set<Artifact> toArtifactSet(final DependencyNode... nodes) {
-		final Set<Artifact> results = new HashSet<Artifact>();
-		for (DependencyNode node : nodes) {
-			node.accept(new DependencyNodeVisitor() {
-				@Override
-				public boolean visit(final DependencyNode node) {
-					results.add(node.getArtifact());
-					return true;
-				}
-
-				@Override
-				public boolean endVisit(final DependencyNode node) {
-					return true;
-				}
-			});
-		}
-		return results;
+		configuredMojo.execute();
 	}
 }

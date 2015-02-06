@@ -18,8 +18,12 @@ package org.debian.dependency.builders;
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
+import java.util.Set;
 
-/** Manages the various different ways to build a project from source. */
+import org.apache.maven.artifact.Artifact;
+import org.debian.dependency.sources.Source;
+
+/** Manages the different ways to build a project from source. */
 public interface SourceBuilderManager {
 	/**
 	 * Attempts to detect which {@link SourceBuilder} would be best suitable to build the given directory. In general, this is
@@ -43,4 +47,16 @@ public interface SourceBuilderManager {
 	 * @return source builders which this manager knows about
 	 */
 	List<SourceBuilder> getSourceBuilders();
+
+	/**
+	 * Builds the given {@link Artifact} provided in {@link Source}. Returns a set of artifacts which were built as part of the
+	 * build process. Artifacts are built using the {@link SourceBuilder} which was detected from {@link #detect(File)}.
+	 *
+	 * @param artifact artifact to build
+	 * @param source source of the artifact
+	 * @param localRepository repository that should be used for resolution
+	 * @return artifacts that were built which can include attached and supplementary artifacts
+	 * @throws ArtifactBuildException in case of errors
+	 */
+	Set<Artifact> build(Artifact artifact, Source source, File localRepository) throws ArtifactBuildException;
 }

@@ -84,6 +84,7 @@
 		<module>build-tools</module>
 		<module>dependency-builder-api</module>
 		<module>dependency-builder-maven-plugin</module>
+		<module>dependency-builder-service</module>
 	</modules>
 	
 	<profiles>

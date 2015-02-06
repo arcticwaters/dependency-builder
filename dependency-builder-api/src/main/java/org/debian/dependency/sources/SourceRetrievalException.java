@@ -15,6 +15,7 @@
  */
 package org.debian.dependency.sources;
 
+/** Represents a problem with retrieving source code. */
 public class SourceRetrievalException extends Exception {
 	private static final long serialVersionUID = 1L;
 

@@ -39,11 +39,12 @@ public interface SourceRetrieval {
 	 * @param artifact which artifact to get sources for
 	 * @param session current session
 	 * @return location of the source or empty if it cannot be found
+	 * @throws SourceRetrievalException in case of errors
 	 */
 	String getSourceLocation(Artifact artifact, MavenSession session) throws SourceRetrievalException;
 
 	/**
-	 * Gets
+	 * Retrieves the source code for the given {@link Artifact} and places it in the given directory.
 	 *
 	 * @param artifact which artifact to get sources for
 	 * @param directory where sources should be placed

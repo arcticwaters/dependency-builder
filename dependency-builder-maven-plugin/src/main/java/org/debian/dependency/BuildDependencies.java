@@ -43,32 +43,21 @@ import org.apache.maven.shared.dependency.graph.DependencyNode;
 import org.apache.maven.shared.dependency.graph.filter.ArtifactDependencyNodeFilter;
 import org.apache.maven.shared.dependency.graph.traversal.CollectingDependencyNodeVisitor;
 import org.apache.maven.shared.dependency.graph.traversal.DependencyNodeVisitor;
-import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.util.FileUtils;
 import org.debian.dependency.builders.ArtifactBuildException;
-import org.debian.dependency.builders.SourceBuilder;
 import org.debian.dependency.builders.SourceBuilderManager;
-import org.debian.dependency.sources.SourceRetrieval;
+import org.debian.dependency.sources.Source;
 import org.debian.dependency.sources.SourceRetrievalException;
-import org.debian.dependency.sources.SourceRetrievalPriorityComparator;
-import org.eclipse.aether.util.StringUtils;
-import org.eclipse.jgit.api.CheckoutCommand;
-import org.eclipse.jgit.api.Git;
-import org.eclipse.jgit.api.RmCommand;
-import org.eclipse.jgit.api.errors.GitAPIException;
-import org.eclipse.jgit.errors.RepositoryNotFoundException;
-import org.eclipse.jgit.lib.Ref;
+import org.debian.dependency.sources.SourceRetrievalManager;
 
 import com.google.common.collect.Iterators;
 import com.google.common.io.Files;
 
 /** Builds the dependencies of a project which deploys Maven metadata. */
-@SuppressWarnings("PMD.GodClass")
 @Mojo(name = "build-dependencies")
 public class BuildDependencies extends AbstractMojo {
 	private static final String SUREFIRE_GROUPID = "org.apache.maven.surefire";
 	private static final String SUREFIRE_PLUGIN_VERSION = "{org.apache.maven.plugins:maven-surefire-plugin}";
-	private static final String WORK_BRANCH = "dependency-builder-maven-plugin";
 
 	/**
 	 * A single artifact to build. This parameter will be merged with {@link #artifacts} and built first if both are specified.
@@ -101,10 +90,7 @@ public class BuildDependencies extends AbstractMojo {
 	 * Maven way and copied to {@link #outputDirectory}.
 	 */
 	@Parameter
-	private final StrictPatternArtifactFilter ignoreArtifacts = new StrictPatternArtifactFilter(false);
-	/** Directory where artifact sources should be checked out to. */
-	@Parameter(defaultValue = "${project.build.directory}/dependency-builder/checkout")
-	private File checkoutDirectory;
+	private final StrictPatternArtifactFilter ignores = new StrictPatternArtifactFilter(false);
 	/** Directory where local git repositories should be made for potential modifications. */
 	@Parameter(defaultValue = "${project.build.directory}/dependency-builder/work")
 	private File workDirectory;
@@ -117,9 +103,9 @@ public class BuildDependencies extends AbstractMojo {
 
 	@Component
 	private RepositorySystem repositorySystem;
-	@Component(role = SourceRetrieval.class)
-	private List<SourceRetrieval> sourceRetrievals;
-	@Requirement
+	@Component
+	private SourceRetrievalManager sourceRetrievalManager;
+	@Component
 	private SourceBuilderManager sourceBuilderManager;
 	@Component
 	private DependencyCollection dependencyCollection;
@@ -135,11 +121,11 @@ public class BuildDependencies extends AbstractMojo {
 
 		setupDefaultIgnores();
 
-		if (!checkoutDirectory.mkdirs()) {
-			throw new MojoExecutionException("Unable to create directory: " + checkoutDirectory);
-		}
-		if (!workDirectory.mkdirs()) {
-			throw new MojoExecutionException("Unable to create directory: " + workDirectory);
+		try {
+			Files.createParentDirs(outputDirectory);
+			FileUtils.forceMkdir(workDirectory);
+		} catch (IOException e) {
+			throw new MojoExecutionException("Failed to write file system", e);
 		}
 
 		try {
@@ -148,12 +134,15 @@ public class BuildDependencies extends AbstractMojo {
 
 			getLog().debug("Installing ignored artifacts");
 			List<DependencyNode> toBuild = dependencyCollection.installDependencies(graphs,
-					new ArtifactDependencyNodeFilter(ignoreArtifacts), repository, session);
+					new ArtifactDependencyNodeFilter(ignores), repository, session);
+			if (toBuild.isEmpty()) {
+				throw new MojoFailureException("All artifacts were ignored and installed, nothing to build!");
+			}
 
-			for (Iterator<DependencyNode> graphsIter = toBuild.iterator(); graphsIter.hasNext();) {
-				DependencyNode graph = graphsIter.next();
-				Set<Artifact> builtArtifacts = buildDependencyGraph(graph);
-				checkSingleProjectFailure(graph, graphsIter, builtArtifacts);
+			for (Iterator<DependencyNode> iter = toBuild.iterator(); iter.hasNext();) {
+				DependencyNode node = iter.next();
+				Set<Artifact> builtArtifacts = buildDependencyGraph(node);
+				checkSingleProjectFailure(node, iter, builtArtifacts);
 			}
 		} catch (InvalidRepositoryException e) {
 			throw new MojoExecutionException("Unable to create local repository", e);
@@ -164,14 +153,15 @@ public class BuildDependencies extends AbstractMojo {
 		}
 	}
 
-	private void checkSingleProjectFailure(final DependencyNode first, final Iterator<DependencyNode> rest,
-			final Set<Artifact> builtArtifacts) throws MojoFailureException {
+	private void checkSingleProjectFailure(final DependencyNode current, final Iterator<DependencyNode> rest, final Set<Artifact> builtArtifacts)
+			throws MojoFailureException {
 		if (multiProject) {
 			return;
 		}
 
+		// collect artifacts to report for failure
 		CollectingDependencyNodeVisitor collector = new CollectingDependencyNodeVisitor();
-		first.accept(collector);
+		current.accept(collector);
 		while (rest.hasNext()) {
 			rest.next().accept(collector);
 		}
@@ -195,32 +185,25 @@ public class BuildDependencies extends AbstractMojo {
 	private Set<Artifact> buildDependencyGraph(final DependencyNode graph) throws MojoFailureException, MojoExecutionException {
 		Iterator<DependencyNode> iter;
 		if (multiProject) {
-			iter = Iterators.singletonIterator(graph);
-		} else {
 			CollectingDependencyNodeVisitor collector = new CollectingDependencyNodeVisitor();
 			graph.accept(collector);
 
 			// reversed ensures dependencies of dependencies are built first
 			iter = new ReversedIterator<DependencyNode>(collector.getNodes());
+		} else {
+			iter = Iterators.singletonIterator(graph);
 		}
 
 		Set<Artifact> result = new HashSet<Artifact>();
 		while (iter.hasNext()) {
 			DependencyNode node = iter.next();
 			try {
-				Git git = checkoutSource(node);
-				SourceBuilder builder = sourceBuilderManager.detect(git.getRepository().getWorkTree());
-				if (builder == null) {
-					throw new MojoFailureException("Unknown build system for " + node.getArtifact());
-				}
-
-				Set<Artifact> built = builder.build(node.getArtifact(), git, outputDirectory);
+				Source source = sourceRetrievalManager.checkoutSource(node.getArtifact(), workDirectory, session);
+				Set<Artifact> built = sourceBuilderManager.build(node.getArtifact(), source, outputDirectory);
 				if (!built.contains(node.getArtifact())) {
 					getLog().warn("Artifact not found in built artifacts: " + node.getArtifact());
 				}
 				result.addAll(built);
-			} catch (IOException e) {
-				throw new MojoExecutionException("Unable to build artifact: " + node.getArtifact(), e);
 			} catch (SourceRetrievalException e) {
 				throw new MojoExecutionException("Unable to retrieve source: " + node.getArtifact(), e);
 			} catch (ArtifactBuildException e) {
@@ -230,108 +213,7 @@ public class BuildDependencies extends AbstractMojo {
 		return result;
 	}
 
-	private Git checkoutSource(final DependencyNode node) throws SourceRetrievalException, IOException {
-		// checkout source of artifact
-		String location = null;
-		File nodeDir = createNewDir(checkoutDirectory, "WORKING-");
-		SourceRetrieval selected = null;
-		for (SourceRetrieval sourceRetrieval : sourceRetrievals) {
-			location = sourceRetrieval.retrieveSource(node.getArtifact(), nodeDir, session);
-			if (!StringUtils.isEmpty(location)) {
-				selected = sourceRetrieval;
-				break;
-			}
-		}
-
-		String dirname = selected.getSourceDirname(node.getArtifact(), session);
-		dirname = dirname.replaceAll("[^a-zA-Z0-9.-]", "_");
-		File destination = new File(checkoutDirectory, dirname);
-		Files.move(nodeDir, destination);
-		nodeDir = destination;
-
-		Git git = makeLocalCopy(nodeDir, new File(workDirectory, nodeDir.getName()), location);
-		return git;
-	}
-
-	/*
-	 * This can be replaced by java.nio.file.Files#createTempDir when java 1.7+ becomes the lowest supported version
-	 */
-	private static File createNewDir(final File parent, final String prefix) {
-		int index = 0;
-		File file;
-		do {
-			file = new File(parent, prefix + ++index);
-		} while (!file.mkdir());
-		return file;
-	}
-
-	private Git makeLocalCopy(final File fromdir, final File todir, final String location) throws IOException {
-		try {
-			// if the work directory is already a git repo, we assume its setup correctly
-			try {
-				Git git = Git.open(todir);
-				ensureOnCorrectBranch(git);
-				return git;
-			} catch (RepositoryNotFoundException e) {
-				getLog().debug("No repository found at " + todir + ", creating from " + fromdir);
-			}
-
-			// otherwise we need to make a copy from the checkout
-			Git git;
-			try {
-				// check to see if we checked out a git repo
-				Git.open(fromdir);
-
-				FileUtils.copyDirectoryStructure(fromdir, todir);
-				git = Git.open(todir);
-			} catch (RepositoryNotFoundException e) {
-				FileUtils.copyDirectoryStructure(fromdir, todir);
-
-				git = Git.init().setDirectory(todir).call();
-				git.add().addFilepattern(".").call();
-
-				// we don't want to track other SCM metadata files
-				RmCommand removeAction = git.rm();
-				for (String pattern : FileUtils.getDefaultExcludes()) {
-					if (pattern.startsWith(".git")) {
-						continue;
-					}
-					removeAction.addFilepattern(pattern);
-				}
-				removeAction.call();
-
-				git.commit().setMessage("Import upstream from " + location).call();
-			}
-
-			ensureOnCorrectBranch(git);
-			return git;
-		} catch (GitAPIException e) {
-			throw new IOException(e);
-		}
-	}
-
-	private void ensureOnCorrectBranch(final Git git) throws GitAPIException {
-		String workBranchRefName = "refs/heads/" + WORK_BRANCH;
-
-		// make sure that we are on the right branch, again assume its setup correctly if there
-		Ref branchRef = null;
-		for (Ref ref : git.branchList().call()) {
-			if (workBranchRefName.equals(ref.getName())) {
-				branchRef = ref;
-				break;
-			}
-		}
-
-		CheckoutCommand command = git.checkout().setName(WORK_BRANCH);
-		if (branchRef == null) {
-			command.setCreateBranch(true);
-		}
-		command.call();
-
-		git.clean().setCleanDirectories(true).call();
-	}
-
-	private List<DependencyNode> createArtifactGraph() throws MojoExecutionException {
+	private List<DependencyNode> createArtifactGraph() throws MojoFailureException, MojoExecutionException {
 		List<DependencyNode> result = new ArrayList<DependencyNode>();
 		List<String> versionReferencingArtifacts = new ArrayList<String>();
 
@@ -351,7 +233,7 @@ public class BuildDependencies extends AbstractMojo {
 		}
 
 		if (result.isEmpty()) {
-			throw new MojoExecutionException("Must specify at least 1 (non-referencing) artifact to build");
+			throw new MojoFailureException("Must specify at least 1 (non-referencing) artifact to build");
 		}
 
 		// stage 2 -- referencing artifacts
@@ -371,7 +253,7 @@ public class BuildDependencies extends AbstractMojo {
 
 	private DependencyNode resolveDependencies(final Artifact artifact) throws DependencyResolutionException {
 		// don't resolve build dependencies for artifacts that are going to be installed; they are not used
-		if (ignoreArtifacts.include(artifact)) {
+		if (ignores.include(artifact)) {
 			return dependencyCollection.resolveProjectDependencies(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion(),
 					null, session);
 		}
@@ -381,10 +263,10 @@ public class BuildDependencies extends AbstractMojo {
 	}
 
 	private void setupDefaultIgnores() {
-		List<String> includes = new ArrayList<String>(ignoreArtifacts.getIncludes());
+		List<String> includes = new ArrayList<String>(ignores.getIncludes());
 		includes.add("org.apache.maven.plugins");
 		includes.add(SUREFIRE_GROUPID); // ensures dependencies below are installed
-		ignoreArtifacts.setIncludes(includes);
+		ignores.setIncludes(includes);
 
 		// implicit dependencies defined by the default plugins covered above in the most common packaging types
 		artifacts.add(String.format("%s:surefire-junit3:%s", SUREFIRE_GROUPID, SUREFIRE_PLUGIN_VERSION));
@@ -431,17 +313,6 @@ public class BuildDependencies extends AbstractMojo {
 		}
 
 		return null;
-	}
-
-	/**
-	 * Sets the {@link SourceRetrieval}s to use.
-	 *
-	 * @param sourceRetrievals source retrievals to use
-	 */
-	public void setSourceRetrievals(final List<SourceRetrieval> sourceRetrievals) {
-		List<SourceRetrieval> newRetrievals = new ArrayList<SourceRetrieval>(sourceRetrievals);
-		Collections.sort(newRetrievals, new SourceRetrievalPriorityComparator());
-		this.sourceRetrievals = newRetrievals;
 	}
 
 	/** Detects an artifact with a particular group and artifact id. */
