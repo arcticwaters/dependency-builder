@@ -1,7 +1,7 @@
 ^#!
 ^<\?xml.*>$
 ^\W*$
-^\W*Copyright \d{4} Andrew Schurman
+^\W*Copyright \d{4} \w+
 ^\W*\d{4}
 ^\W*$
 ^\W*Licensed under the Apache License, Version 2.0 \(the "License"\);$
