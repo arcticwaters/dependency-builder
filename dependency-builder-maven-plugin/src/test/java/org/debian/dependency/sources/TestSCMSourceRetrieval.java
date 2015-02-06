@@ -36,7 +36,6 @@ import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
 import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.Scm;
-import org.apache.maven.plugin.testing.MojoRule;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectBuilder;
 import org.apache.maven.project.ProjectBuildingRequest;
@@ -53,7 +52,6 @@ import org.apache.maven.settings.crypto.SettingsDecrypter;
 import org.apache.maven.settings.crypto.SettingsDecryptionRequest;
 import org.codehaus.plexus.logging.Logger;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Answers;
@@ -70,9 +68,6 @@ public class TestSCMSourceRetrieval {
 	private static final String DEV_CONNECTION = "developer-connection";
 	private static final String CONNECTION = "connection";
 
-	@Rule
-	public MojoRule mojoRule = new MojoRule();
-
 	@InjectMocks
 	private SCMSourceRetrieval sourceRetrieval = new SCMSourceRetrieval();
 	@Mock(answer = Answers.RETURNS_DEEP_STUBS)
@@ -86,10 +81,11 @@ public class TestSCMSourceRetrieval {
 	@Mock
 	private Logger logger;
 
-	private MavenSession session = mojoRule.newMavenSession(new MavenProject());
 	private File directory = new File("");
 	private Artifact artifact = mock(Artifact.class, Answers.RETURNS_SMART_NULLS.get());
 	private MavenProject resolvedProject = new MavenProject();
+	@Mock(answer = Answers.RETURNS_MOCKS)
+	private MavenSession session;
 
 	@Before
 	public void setUp() throws Exception {

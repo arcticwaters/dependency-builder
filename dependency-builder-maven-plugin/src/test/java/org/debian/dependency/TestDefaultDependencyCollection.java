@@ -42,7 +42,6 @@ import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
 import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
 import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.testing.MojoRule;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectBuilder;
 import org.apache.maven.project.ProjectBuildingRequest;
@@ -53,7 +52,6 @@ import org.apache.maven.shared.dependency.graph.internal.DefaultDependencyNode;
 import org.codehaus.plexus.logging.Logger;
 import org.hamcrest.CustomMatcher;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Answers;
@@ -67,9 +65,6 @@ import org.mockito.stubbing.Answer;
 /** Test case for {@link DefaultDependencyCollection}. */
 @RunWith(MockitoJUnitRunner.class)
 public class TestDefaultDependencyCollection {
-	@Rule
-	public MojoRule mojoRule = new MojoRule();
-
 	@InjectMocks
 	private DefaultDependencyCollection collector = new DefaultDependencyCollection();
 	@Mock
@@ -81,10 +76,11 @@ public class TestDefaultDependencyCollection {
 	@Mock(answer = Answers.RETURNS_MOCKS)
 	private RepositorySystem repositorySystem;
 
-	private MavenSession session = mojoRule.newMavenSession(new MavenProject());
+	private DependencyNode singleNodeGraph = createNode(null);
+	@Mock(answer = Answers.RETURNS_MOCKS)
+	private MavenSession session;
 	@Mock
 	private ArtifactRepository repository;
-	private DependencyNode singleNodeGraph = createNode(null);
 
 	@Before
 	public void setUp() throws Exception {

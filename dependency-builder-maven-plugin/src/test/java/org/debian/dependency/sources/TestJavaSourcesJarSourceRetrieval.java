@@ -35,8 +35,6 @@ import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
 import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
 import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.testing.MojoRule;
-import org.apache.maven.project.MavenProject;
 import org.apache.maven.repository.RepositorySystem;
 import org.codehaus.plexus.logging.Logger;
 import org.junit.Before;
@@ -61,8 +59,6 @@ public class TestJavaSourcesJarSourceRetrieval {
 	private static final String DATA2 = "more-data";
 
 	@Rule
-	public MojoRule mojoRule = new MojoRule();
-	@Rule
 	public TemporaryFolder tempFolder = new TemporaryFolder();
 
 	@InjectMocks
@@ -72,9 +68,10 @@ public class TestJavaSourcesJarSourceRetrieval {
 	@Mock
 	private Logger logger;
 
-	private MavenSession session = mojoRule.newMavenSession(new MavenProject());
 	private File directory;
 	private Artifact artifact = mock(Artifact.class, Answers.RETURNS_SMART_NULLS.get());
+	@Mock
+	private MavenSession session;
 
 	@Before
 	public void setUp() throws Exception {
