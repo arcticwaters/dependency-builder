@@ -54,7 +54,6 @@ import org.codehaus.plexus.util.StringUtils;
  */
 @Component(role = SourceRetrieval.class, hint = "scm")
 public class SCMSourceRetrieval extends AbstractLogEnabled implements SourceRetrieval {
-	@SuppressWarnings("checkstyle:MagicNumber")
 	private static final int PRIORITY = PRIORITY_HIGH + PRIORITY_LOW / 2;
 
 	@Requirement

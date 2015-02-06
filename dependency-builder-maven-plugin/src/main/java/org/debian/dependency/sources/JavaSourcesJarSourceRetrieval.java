@@ -38,7 +38,6 @@ import org.codehaus.plexus.util.IOUtil;
  */
 @Component(role = SourceRetrieval.class, hint = "java-sources")
 public class JavaSourcesJarSourceRetrieval extends AbstractLogEnabled implements SourceRetrieval {
-	@SuppressWarnings("checkstyle:MagicNumberCheck")
 	private static final int PRIORITY = PRIORITY_LOW + PRIORITY_LOW / 2;
 
 	@Requirement
