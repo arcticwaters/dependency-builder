@@ -22,6 +22,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThat;
 import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.argThat;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.when;
 
@@ -43,8 +44,10 @@ import javax.xml.stream.XMLStreamWriter;
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.DefaultArtifact;
 import org.apache.maven.model.building.ModelBuilder;
+import org.apache.maven.model.building.ModelBuildingException;
 import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.repository.RepositorySystem;
+import org.codehaus.plexus.logging.Logger;
 import org.debian.dependency.sources.Source;
 import org.hamcrest.CustomTypeSafeMatcher;
 import org.junit.Before;
@@ -74,6 +77,8 @@ public class TestEmbeddedAntBuilder {
 	private ModelBuilder modelBuilder;
 	@Mock(answer = Answers.RETURNS_MOCKS)
 	private RepositorySystem repoSystem;
+	@Mock
+	private Logger logger;
 
 	private XMLOutputFactory factory = XMLOutputFactory.newInstance();
 	private File pomFile;
@@ -84,6 +89,7 @@ public class TestEmbeddedAntBuilder {
 	private Source source;
 
 	@Before
+	@SuppressWarnings("unchecked")
 	public void setUp() throws Exception {
 		File sourceLocation = tempFolder.newFolder();
 		when(source.getLocation())
@@ -95,6 +101,13 @@ public class TestEmbeddedAntBuilder {
 				.thenReturn(artifact.getArtifactId());
 		when(modelBuilder.build(any(ModelBuildingRequest.class)).getEffectiveModel().getVersion())
 				.thenReturn(artifact.getVersion());
+		when(modelBuilder.build(argThat(new CustomTypeSafeMatcher<ModelBuildingRequest>("Invalid pom files") {
+			@Override
+			protected boolean matchesSafely(final ModelBuildingRequest request) {
+				return !request.getModelSource().getLocation().equals(pomFile.getPath());
+			}
+		})))
+				.thenThrow(ModelBuildingException.class);
 
 		buildFile = File.createTempFile("build", ".xml", sourceLocation);
 		writeEmptyBuildFile(buildFile);
@@ -205,6 +218,18 @@ public class TestEmbeddedAntBuilder {
 		when(source.getLocation())
 				.thenReturn(folder);
 
+		builder.build(artifact, source, repository);
+	}
+
+	/** If the pom file that we found cannot be read (or there isn't a valid pom file), we should bail. */
+	@SuppressWarnings("unchecked")
+	@Test(expected = ArtifactBuildException.class)
+	public void testInvalidPomFile() throws Exception {
+		when(modelBuilder.build(any(ModelBuildingRequest.class)))
+				.thenThrow(ModelBuildingException.class);
+
+		// this should really be built during the ant execution
+		writeSimpleJar(new File(source.getLocation(), "build.jar"));
 		builder.build(artifact, source, repository);
 	}
 
