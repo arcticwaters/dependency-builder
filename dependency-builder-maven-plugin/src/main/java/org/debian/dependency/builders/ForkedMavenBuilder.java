@@ -36,6 +36,7 @@ import org.apache.maven.model.building.ModelBuildingException;
 import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.repository.RepositorySystem;
 import org.apache.maven.shared.invoker.DefaultInvocationRequest;
+import org.apache.maven.shared.invoker.InvocationOutputHandler;
 import org.apache.maven.shared.invoker.InvocationRequest;
 import org.apache.maven.shared.invoker.InvocationResult;
 import org.apache.maven.shared.invoker.Invoker;
@@ -83,6 +84,18 @@ public class ForkedMavenBuilder extends AbstractBuildFileSourceBuilder implement
 					.setOffline(true)
 					.setRecursive(false) // in case we are dealing with a pom packaging
 					.setProperties(properties)
+					.setOutputHandler(new InvocationOutputHandler() {
+						@Override
+						public void consumeLine(final String line) {
+							getLogger().info(line);
+						}
+					})
+					.setErrorHandler(new InvocationOutputHandler() {
+						@Override
+						public void consumeLine(final String line) {
+							getLogger().error(line);
+						}
+					})
 					.setLocalRepositoryDirectory(localRepository);
 
 			try {
