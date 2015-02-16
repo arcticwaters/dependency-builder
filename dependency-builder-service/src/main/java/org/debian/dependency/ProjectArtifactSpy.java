@@ -33,7 +33,7 @@ import org.codehaus.plexus.component.annotations.Requirement;
 /**
  * Reports all artifacts for successful projects.
  */
-@Component(role = EventSpy.class)
+@Component(role = EventSpy.class, hint = "artifact-spy")
 public class ProjectArtifactSpy implements EventSpy {
 	/** Property name of the report file that must be set to usage. */
 	public static final String REPORT_FILE_PROPERTY = "debian.maven.report.projects";

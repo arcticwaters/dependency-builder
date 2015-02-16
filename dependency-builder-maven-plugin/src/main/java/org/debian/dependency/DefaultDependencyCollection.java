@@ -58,7 +58,7 @@ import org.codehaus.plexus.logging.AbstractLogEnabled;
 import org.debian.dependency.filters.DependencyNodeAncestorOrSelfArtifactFilter;
 
 /** Default implementation of {@link DependencyCollection}. */
-@Component(role = DependencyCollection.class, hint = "default")
+@Component(role = DependencyCollection.class)
 public class DefaultDependencyCollection extends AbstractLogEnabled implements DependencyCollection {
 	@Requirement
 	private ProjectBuilder projectBuilder;

@@ -35,7 +35,7 @@ import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
 
 /** A git implementation of {@link Source} using JGit. */
-@Component(role = Source.class, hint = "default", instantiationStrategy = "per-lookup")
+@Component(role = Source.class, hint = "jgit", instantiationStrategy = "per-lookup")
 public class JGitSource extends AbstractLogEnabled implements Source {
 	private static final String COMMIT_MESSAGE_PREFIX = "[dependency-builder]";
 	private static final String WORK_BRANCH = "dependency-builder-maven-plugin";

@@ -42,7 +42,7 @@ import com.google.common.io.Files;
 public class DefaultSourceRetrievalManager extends AbstractLogEnabled implements SourceRetrievalManager, Contextualizable {
 	@Requirement(role = SourceRetrieval.class)
 	private List<SourceRetrieval> sourceRetrievals;
-	@Configuration(name = "source-type", value = "default")
+	@Configuration(name = "source-type", value = "jgit")
 	private String sourceType;
 	private PlexusContainer container;
 
