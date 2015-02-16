@@ -52,7 +52,7 @@ public class JavaSourcesJarSourceRetrieval extends AbstractLogEnabled implements
 	@Override
 	public String retrieveSource(final Artifact artifact, final File directory, final MavenSession session) throws SourceRetrievalException {
 		Artifact sourcesArtifact = repoSystem.createArtifactWithClassifier(artifact.getGroupId(), artifact.getArtifactId(),
-				artifact.getVersion(), artifact.getType(), "sources");
+				artifact.getVersion(), "jar", "sources");
 		sourcesArtifact = resolveArtifact(sourcesArtifact, session);
 
 		if (sourcesArtifact == null || sourcesArtifact.getFile() == null || !sourcesArtifact.getFile().exists()) {
@@ -62,7 +62,7 @@ public class JavaSourcesJarSourceRetrieval extends AbstractLogEnabled implements
 		}
 
 		try {
-			extractArtifactJar(artifact, directory);
+			extractArtifactJar(sourcesArtifact, directory);
 
 			Artifact pomArtifact = repoSystem.createProjectArtifact(artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion());
 			pomArtifact = resolveArtifact(pomArtifact, session);
@@ -102,7 +102,9 @@ public class JavaSourcesJarSourceRetrieval extends AbstractLogEnabled implements
 			}
 		} finally {
 			try {
-				jarFile.close();
+				if (jarFile != null) {
+					jarFile.close();
+				}
 			} catch (IOException e) {
 				getLogger().debug("Ignoring error when closing zip", e);
 			}

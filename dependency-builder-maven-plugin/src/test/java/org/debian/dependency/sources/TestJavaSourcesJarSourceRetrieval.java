@@ -21,7 +21,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThat;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
-import static org.mockito.Mockito.mock;
+import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
@@ -69,7 +69,10 @@ public class TestJavaSourcesJarSourceRetrieval {
 	private Logger logger;
 
 	private File directory;
-	private Artifact artifact = mock(Artifact.class, Answers.RETURNS_SMART_NULLS.get());
+	@Mock(answer = Answers.RETURNS_SMART_NULLS)
+	private Artifact javaArtifact;
+	@Mock(answer = Answers.RETURNS_SMART_NULLS)
+	private Artifact sourcesArtifact;
 	@Mock
 	private MavenSession session;
 
@@ -87,46 +90,46 @@ public class TestJavaSourcesJarSourceRetrieval {
 						return result;
 					}
 				});
-		when(repoSystem.createArtifactWithClassifier(anyString(), anyString(), anyString(), anyString(), anyString()))
-				.thenReturn(artifact);
+		when(repoSystem.createArtifactWithClassifier(anyString(), anyString(), anyString(), eq("jar"), eq("sources")))
+				.thenReturn(sourcesArtifact);
 
-		when(artifact.getType())
+		when(javaArtifact.getType())
 				.thenReturn("jar");
 	}
 
 	/** Get location should never return an empty value. */
 	@Test
 	public void testGetLocation() throws Exception {
-		String result = sourceRetrieval.getSourceLocation(artifact, session);
+		String result = sourceRetrieval.getSourceLocation(javaArtifact, session);
 		assertThat(result, not(isEmptyOrNullString()));
 	}
 
 	/** Get directory name should never return an empty value. */
 	@Test
 	public void testGetDirname() throws Exception {
-		String result = sourceRetrieval.getSourceDirname(artifact, session);
+		String result = sourceRetrieval.getSourceDirname(javaArtifact, session);
 		assertThat(result, not(isEmptyOrNullString()));
 	}
 
 	/** When there are no attached sources. */
 	@Test
 	public void testNoAttachedSources() throws Exception {
-		when(artifact.getFile())
+		when(sourcesArtifact.getFile())
 				.thenReturn(null);
 
-		String result = sourceRetrieval.retrieveSource(artifact, directory, session);
+		String result = sourceRetrieval.retrieveSource(javaArtifact, directory, session);
 		assertThat(result, isEmptyOrNullString());
 	}
 
 	/** Ensure that we can only work with jar artifacts. */
 	@Test(expected = SourceRetrievalException.class)
 	public void testRetrieveNonJar() throws Exception {
-		when(artifact.getType())
+		when(javaArtifact.getType())
 				.thenReturn("bz2");
-		when(artifact.getFile())
+		when(sourcesArtifact.getFile())
 				.thenReturn(tempFolder.newFile("sources.bz2"));
 
-		sourceRetrieval.retrieveSource(artifact, directory, session);
+		sourceRetrieval.retrieveSource(javaArtifact, directory, session);
 	}
 
 	/** Jar with files before folders. */
@@ -146,12 +149,12 @@ public class TestJavaSourcesJarSourceRetrieval {
 		stream.putNextEntry(new JarEntry("/folder/"));
 		stream.close();
 
-		when(artifact.getFile())
+		when(sourcesArtifact.getFile())
 				.thenReturn(jarFile);
 		when(repoSystem.createProjectArtifact(anyString(), anyString(), anyString()).getFile())
 				.thenReturn(tempFolder.newFile());
 
-		String result = sourceRetrieval.retrieveSource(artifact, directory, session);
+		String result = sourceRetrieval.retrieveSource(javaArtifact, directory, session);
 		assertThat(result, not(isEmptyOrNullString()));
 
 		assertEquals(DATA1, Files.readLines(new File(directory, "src/main/java/folder/entry1"), Charset.defaultCharset(), new LineJoiner()));
@@ -175,12 +178,12 @@ public class TestJavaSourcesJarSourceRetrieval {
 		stream.write(DATA1.getBytes());
 		stream.close();
 
-		when(artifact.getFile())
+		when(sourcesArtifact.getFile())
 				.thenReturn(jarFile);
 		when(repoSystem.createProjectArtifact(anyString(), anyString(), anyString()).getFile())
 				.thenReturn(tempFolder.newFile());
 
-		String result = sourceRetrieval.retrieveSource(artifact, directory, session);
+		String result = sourceRetrieval.retrieveSource(javaArtifact, directory, session);
 		assertThat(result, not(isEmptyOrNullString()));
 
 		assertEquals(DATA1, Files.readLines(new File(directory, "src/main/java/folder/entry1"), Charset.defaultCharset(), new LineJoiner()));
@@ -197,12 +200,12 @@ public class TestJavaSourcesJarSourceRetrieval {
 		File pomFile = tempFolder.newFile();
 		Files.write(DATA1.getBytes(), pomFile);
 
-		when(artifact.getFile())
+		when(sourcesArtifact.getFile())
 				.thenReturn(jarFile);
 		when(repoSystem.createProjectArtifact(anyString(), anyString(), anyString()).getFile())
 				.thenReturn(pomFile);
 
-		String result = sourceRetrieval.retrieveSource(artifact, directory, session);
+		String result = sourceRetrieval.retrieveSource(javaArtifact, directory, session);
 		assertThat(result, not(isEmptyOrNullString()));
 
 		assertEquals(DATA1, Files.readLines(new File(directory, "pom.xml"), Charset.defaultCharset(), new LineJoiner()));
@@ -214,10 +217,10 @@ public class TestJavaSourcesJarSourceRetrieval {
 		File jarFile = tempFolder.newFile();
 		Files.write("not a jar file".getBytes(), jarFile);
 
-		when(artifact.getFile())
+		when(sourcesArtifact.getFile())
 				.thenReturn(jarFile);
 
-		sourceRetrieval.retrieveSource(artifact, directory, session);
+		sourceRetrieval.retrieveSource(javaArtifact, directory, session);
 	}
 
 	private static class LineJoiner implements LineProcessor<String> {
