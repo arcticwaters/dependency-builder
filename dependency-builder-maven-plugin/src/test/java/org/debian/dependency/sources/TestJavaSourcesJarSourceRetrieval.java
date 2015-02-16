@@ -104,9 +104,6 @@ public class TestJavaSourcesJarSourceRetrieval {
 	/** Get directory name should never return an empty value. */
 	@Test
 	public void testGetDirname() throws Exception {
-		when(artifact.getId())
-				.thenReturn("some-id");
-
 		String result = sourceRetrieval.getSourceDirname(artifact, session);
 		assertThat(result, not(isEmptyOrNullString()));
 	}

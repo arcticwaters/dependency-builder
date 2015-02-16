@@ -23,6 +23,7 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.ArtifactUtils;
 import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
 import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
 import org.apache.maven.execution.MavenSession;
@@ -130,6 +131,6 @@ public class JavaSourcesJarSourceRetrieval extends AbstractLogEnabled implements
 
 	@Override
 	public String getSourceDirname(final Artifact artifact, final MavenSession session) throws SourceRetrievalException {
-		return artifact.getId();
+		return ArtifactUtils.key(artifact);
 	}
 }

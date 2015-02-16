@@ -19,6 +19,7 @@ import java.io.File;
 import java.util.List;
 
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.ArtifactUtils;
 import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
 import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
 import org.apache.maven.execution.MavenSession;
@@ -226,6 +227,6 @@ public class SCMSourceRetrieval extends AbstractLogEnabled implements SourceRetr
 	@Override
 	public String getSourceDirname(final Artifact artifact, final MavenSession session) throws SourceRetrievalException {
 		MavenProject project = findProjectRoot(constructProject(artifact, session));
-		return project.getId();
+		return ArtifactUtils.key(project.getArtifact());
 	}
 }

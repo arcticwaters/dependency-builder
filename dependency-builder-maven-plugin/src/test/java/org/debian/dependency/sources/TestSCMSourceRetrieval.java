@@ -93,6 +93,7 @@ public class TestSCMSourceRetrieval {
 		resolvedProject.setScm(new Scm());
 		resolvedProject.getScm().setConnection(CONNECTION);
 		resolvedProject.getScm().setDeveloperConnection(DEV_CONNECTION);
+		resolvedProject.setArtifact(mock(Artifact.class, Answers.RETURNS_SMART_NULLS.get()));
 
 		when(repoSystem.resolve(any(ArtifactResolutionRequest.class)))
 				.then(new Answer<ArtifactResolutionResult>() {
