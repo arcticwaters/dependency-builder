@@ -23,10 +23,13 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.model.Model;
@@ -45,7 +48,7 @@ import org.codehaus.plexus.component.annotations.Component;
 import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.util.IOUtil;
 import org.codehaus.plexus.util.StringUtils;
-import org.debian.dependency.ProjectArtifactSpy;
+import org.debian.dependency.ServicePackage;
 import org.debian.dependency.sources.Source;
 
 /**
@@ -55,6 +58,8 @@ import org.debian.dependency.sources.Source;
 public class ForkedMavenBuilder extends AbstractBuildFileSourceBuilder implements SourceBuilder {
 	private static final String POM_INCLUDES = "**/pom.xml";
 	private static final String POM_EXCLUDES = "**/src/**";
+	private static final Pattern ARTIFACT_PATTERN = Pattern.compile("^(?<groupId>[^:]*):(?<artifactId>[^:]*):(?<type>[^:]*)"
+			+ "(?::(?<classifier>[^:]*))?:(?<version>[^:]*)$");
 
 	@Requirement
 	private ModelBuilder modelBuilder;
@@ -65,56 +70,43 @@ public class ForkedMavenBuilder extends AbstractBuildFileSourceBuilder implement
 
 	@Override
 	public Set<Artifact> build(final Artifact artifact, final Source source, final File localRepository) throws ArtifactBuildException {
-		File reportFile;
+		Properties properties = new Properties();
+		properties.setProperty("maven.ext.class.path", getOriginClassPath(ServicePackage.class).toString());
+
+		Model model = findProjectModel(artifact, source.getLocation());
+		InvocationRequest request = new DefaultInvocationRequest()
+				.setPomFile(model.getPomFile())
+				.setGoals(Arrays.asList("verify"))
+				.setOffline(true)
+				.setRecursive(false) // in case we are dealing with a pom packaging
+				.setProperties(properties)
+				.setOutputHandler(new InvocationOutputHandler() {
+					@Override
+					public void consumeLine(final String line) {
+						getLogger().info(line);
+					}
+				})
+				.setErrorHandler(new InvocationOutputHandler() {
+					@Override
+					public void consumeLine(final String line) {
+						getLogger().error(line);
+					}
+				})
+				.setLocalRepositoryDirectory(localRepository);
+
 		try {
-			reportFile = File.createTempFile("report", ".txt");
+			InvocationResult result = invoker.execute(request);
+			if (result.getExecutionException() == null && result.getExitCode() == 0) {
+				return getBuiltArtifacts(new File(model.getBuild().getDirectory(), ServicePackage.PROJECT_ARTIFACT_REPORT_NAME));
+			} else if (result.getExecutionException() != null) {
+				throw new ArtifactBuildException("Unable to build proejct", result.getExecutionException());
+			}
+
+			throw new ArtifactBuildException("Execution did not complete successfully");
+		} catch (MavenInvocationException e) {
+			throw new ArtifactBuildException("Unable to build project", e);
 		} catch (IOException e) {
 			throw new ArtifactBuildException(e);
-		}
-
-		try {
-			Properties properties = new Properties();
-			properties.setProperty("maven.ext.class.path", getOriginClassPath(ProjectArtifactSpy.class).toString());
-			properties.setProperty(ProjectArtifactSpy.REPORT_FILE_PROPERTY, reportFile.toString());
-
-			Model model = findProjectModel(artifact, source.getLocation());
-			InvocationRequest request = new DefaultInvocationRequest()
-					.setPomFile(model.getPomFile())
-					.setGoals(Arrays.asList("verify"))
-					.setOffline(true)
-					.setRecursive(false) // in case we are dealing with a pom packaging
-					.setProperties(properties)
-					.setOutputHandler(new InvocationOutputHandler() {
-						@Override
-						public void consumeLine(final String line) {
-							getLogger().info(line);
-						}
-					})
-					.setErrorHandler(new InvocationOutputHandler() {
-						@Override
-						public void consumeLine(final String line) {
-							getLogger().error(line);
-						}
-					})
-					.setLocalRepositoryDirectory(localRepository);
-
-			try {
-				InvocationResult result = invoker.execute(request);
-				if (result.getExecutionException() == null && result.getExitCode() == 0) {
-					return getBuiltArtifacts(reportFile);
-				} else if (result.getExecutionException() != null) {
-					throw new ArtifactBuildException("Unable to build proejct", result.getExecutionException());
-				}
-
-				throw new ArtifactBuildException("Execution did not complete successfully");
-			} catch (MavenInvocationException e) {
-				throw new ArtifactBuildException("Unable to build project", e);
-			} catch (IOException e) {
-				throw new ArtifactBuildException(e);
-			}
-		} finally {
-			// best effort, not really necessary to delete this
-			reportFile.delete();
 		}
 	}
 
@@ -151,9 +143,12 @@ public class ForkedMavenBuilder extends AbstractBuildFileSourceBuilder implement
 		}
 	}
 
-	private Set<Artifact> getBuiltArtifacts(final File reportFile) throws IOException {
-		Properties artifacts = new Properties();
+	private Set<Artifact> getBuiltArtifacts(final File reportFile) throws IOException, ArtifactBuildException {
+		if (!reportFile.exists()) {
+			return Collections.emptySet();
+		}
 
+		Properties artifacts = new Properties();
 		FileInputStream stream = new FileInputStream(reportFile);
 		try {
 			artifacts.load(stream);
@@ -163,20 +158,22 @@ public class ForkedMavenBuilder extends AbstractBuildFileSourceBuilder implement
 
 		Set<Artifact> result = new HashSet<Artifact>();
 		for (String specifier : artifacts.stringPropertyNames()) {
-			String[] pieces = specifier.split(":");
+			Matcher matcher = ARTIFACT_PATTERN.matcher(specifier);
+			if (!matcher.find()) {
+				throw new ArtifactBuildException("Illegal artifact specifier: " + specifier);
+			}
 
-			final int groupIdIndex = 0;
-			final int artifactIdIndex = 1;
-			final int versionIndex = pieces.length - 1;
-			final int typeIndex = 2;
-			final int classifierIndex = 3;
+			String groupId = matcher.group("groupId");
+			String artifactId = matcher.group("artifactId");
+			String version = matcher.group("version");
+			String type = matcher.group("type");
+			String classifier = matcher.group("classifier");
 
 			Artifact artifact;
-			if (pieces.length > classifierIndex + 1) {
-				artifact = repositorySystem.createArtifactWithClassifier(pieces[groupIdIndex], pieces[artifactIdIndex], pieces[versionIndex],
-						pieces[typeIndex], pieces[classifierIndex]);
+			if (classifier == null) {
+				artifact = repositorySystem.createArtifact(groupId, artifactId, version, type);
 			} else {
-				artifact = repositorySystem.createArtifact(pieces[groupIdIndex], pieces[artifactIdIndex], pieces[versionIndex], pieces[typeIndex]);
+				artifact = repositorySystem.createArtifactWithClassifier(groupId, artifactId, version, type, classifier);
 			}
 
 			artifact.setFile(new File(artifacts.getProperty(specifier)));

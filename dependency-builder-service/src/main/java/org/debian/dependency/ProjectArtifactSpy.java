@@ -35,8 +35,6 @@ import org.codehaus.plexus.component.annotations.Requirement;
  */
 @Component(role = EventSpy.class, hint = "artifact-spy")
 public class ProjectArtifactSpy implements EventSpy {
-	/** Property name of the report file that must be set to usage. */
-	public static final String REPORT_FILE_PROPERTY = "debian.maven.report.projects";
 	@Requirement
 	private RepositorySystem repoSystem;
 	private Properties artifacts;
@@ -44,16 +42,6 @@ public class ProjectArtifactSpy implements EventSpy {
 
 	@Override
 	public void init(final Context context) {
-		String name = System.getProperty(REPORT_FILE_PROPERTY);
-		if (name == null) {
-			throw new IllegalStateException("Must specify system property " + REPORT_FILE_PROPERTY);
-		}
-
-		outputFile = new File(name);
-		if (!outputFile.canWrite()) {
-			throw new IllegalStateException("Unable to write file " + outputFile);
-		}
-
 		artifacts = new Properties();
 	}
 
@@ -71,6 +59,11 @@ public class ProjectArtifactSpy implements EventSpy {
 		Artifact pomArtifact = repoSystem.createProjectArtifact(project.getGroupId(), project.getArtifactId(), project.getVersion());
 		pomArtifact.setFile(project.getFile());
 
+		// the first project should always be the top-level project
+		if (outputFile == null) {
+			outputFile = new File(project.getBuild().getDirectory(), ServicePackage.PROJECT_ARTIFACT_REPORT_NAME);
+		}
+
 		recordArtifact(pomArtifact);
 		recordArtifact(project.getArtifact());
 		for (Artifact artifact : project.getAttachedArtifacts()) {
@@ -86,11 +79,14 @@ public class ProjectArtifactSpy implements EventSpy {
 
 	@Override
 	public void close() throws IOException {
-		OutputStream stream = new FileOutputStream(outputFile);
-		try {
-			artifacts.store(stream, "");
-		} finally {
-			stream.close();
+		if (outputFile != null) {
+			outputFile.getParentFile().mkdirs();
+			OutputStream stream = new FileOutputStream(outputFile);
+			try {
+				artifacts.store(stream, "");
+			} finally {
+				stream.close();
+			}
 		}
 	}
 }

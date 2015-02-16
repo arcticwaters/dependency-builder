@@ -40,7 +40,6 @@ import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.installer.ArtifactInstaller;
-import org.apache.maven.model.Model;
 import org.apache.maven.model.building.ModelBuilder;
 import org.apache.maven.model.building.ModelBuildingException;
 import org.apache.maven.model.building.ModelBuildingRequest;
@@ -50,14 +49,16 @@ import org.apache.maven.shared.invoker.InvocationRequest;
 import org.apache.maven.shared.invoker.InvocationResult;
 import org.apache.maven.shared.invoker.Invoker;
 import org.apache.maven.shared.invoker.MavenInvocationException;
-import org.apache.maven.shared.utils.io.IOUtil;
 import org.codehaus.plexus.logging.Logger;
+import org.codehaus.plexus.util.IOUtil;
 import org.codehaus.plexus.util.cli.CommandLineException;
-import org.debian.dependency.ProjectArtifactSpy;
+import org.debian.dependency.ServicePackage;
 import org.debian.dependency.sources.Source;
 import org.hamcrest.CustomTypeSafeMatcher;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
@@ -74,6 +75,9 @@ public class TestForkedMavenBuilder {
 	private static final String VERSION = "version";
 	private static final String ARTIFACT_ID = "artifactId";
 	private static final String GROUP_ID = "groupId";
+
+	@Rule
+	public TemporaryFolder tempFolder = new TemporaryFolder();
 
 	@Spy
 	@InjectMocks
@@ -119,6 +123,10 @@ public class TestForkedMavenBuilder {
 				.thenReturn(ARTIFACT_ID);
 		when(modelBuilder.build(any(ModelBuildingRequest.class)).getEffectiveModel().getVersion())
 				.thenReturn(VERSION);
+		when(modelBuilder.build(any(ModelBuildingRequest.class)).getEffectiveModel().getPomFile())
+				.thenReturn(buildFile);
+		when(modelBuilder.build(any(ModelBuildingRequest.class)).getEffectiveModel().getBuild().getDirectory())
+				.thenReturn(tempFolder.getRoot().getCanonicalPath());
 
 		when(invoker.execute(any(InvocationRequest.class)))
 				.thenReturn(mock(InvocationResult.class));
@@ -147,25 +155,24 @@ public class TestForkedMavenBuilder {
 		})))
 				.thenThrow(new ModelBuildingException(null));
 
-		Model model = mock(Model.class);
-		when(model.getGroupId())
+		ModelBuildingResult modelBuild = mock(ModelBuildingResult.class, Answers.RETURNS_DEEP_STUBS.get());
+		when(modelBuild.getEffectiveModel().getGroupId())
 				.thenReturn(GROUP_ID);
-		when(model.getArtifactId())
+		when(modelBuild.getEffectiveModel().getArtifactId())
 				.thenReturn(ARTIFACT_ID);
-		when(model.getVersion())
+		when(modelBuild.getEffectiveModel().getVersion())
 				.thenReturn(VERSION);
-		when(model.getPomFile())
+		when(modelBuild.getEffectiveModel().getPomFile())
 				.thenReturn(buildFile);
-		ModelBuildingResult modelBuildingResult = mock(ModelBuildingResult.class);
-		when(modelBuildingResult.getEffectiveModel())
-				.thenReturn(model);
+		when(modelBuild.getEffectiveModel().getBuild().getDirectory())
+				.thenReturn(tempFolder.getRoot().getPath());
 
 		when(modelBuilder.build(argThat(new CustomTypeSafeMatcher<ModelBuildingRequest>("Good build file") {
 			@Override
 			protected boolean matchesSafely(final ModelBuildingRequest item) {
 				return buildFile.getAbsoluteFile().equals(item.getPomFile().getAbsoluteFile());
 			}
-		}))).thenReturn(modelBuildingResult);
+		}))).thenReturn(modelBuild);
 
 		builder.build(artifact, source, repository);
 
@@ -251,8 +258,7 @@ public class TestForkedMavenBuilder {
 				.then(new Answer<InvocationResult>() {
 					@Override
 					public InvocationResult answer(final InvocationOnMock invocation) throws Throwable {
-						InvocationRequest request = (InvocationRequest) invocation.getArguments()[0];
-						File file = new File(request.getProperties().getProperty(ProjectArtifactSpy.REPORT_FILE_PROPERTY));
+						File file = new File(tempFolder.getRoot(), ServicePackage.PROJECT_ARTIFACT_REPORT_NAME);
 
 						Properties properties = new Properties();
 						properties.setProperty(GROUP_ID + ":" + ARTIFACT_ID + ":jar:" + VERSION, jarFile);
