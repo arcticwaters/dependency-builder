@@ -35,13 +35,16 @@ import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.InvalidRepositoryException;
 import org.apache.maven.artifact.installer.ArtifactInstallationException;
+import org.apache.maven.artifact.installer.ArtifactInstaller;
 import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
 import org.apache.maven.execution.MavenSession;
@@ -105,6 +108,8 @@ public class TestBuildDependencies {
 	private SourceBuilderManager builderManager;
 	@Mock
 	private DependencyCollection depCollection;
+	@Mock
+	private ArtifactInstaller installer;
 
 	@Before
 	public void setUp() throws Exception {
@@ -623,5 +628,45 @@ public class TestBuildDependencies {
 				.thenThrow(new ArtifactBuildException());
 
 		configuredMojo.execute();
+	}
+
+	/** All artifacts that were built should also be to the output directory. */
+	@Test
+	public void testArtifactsInstalled() throws Exception {
+		PlexusConfiguration config = new DefaultPlexusConfiguration("configuration");
+		config.getChild("artifacts").addChild("artifact", "some:artifact1");
+		config.getChild("artifacts").addChild("artifact", "some:artifact2");
+		config.addChild("multiProject", "true");
+		configureMojo(unconfiguredMojo, config);
+
+		ArtifactRepository repository = mock(ArtifactRepository.class);
+		when(repoSystem.createLocalRepository(any(File.class)))
+				.thenReturn(repository);
+
+
+		File file1 = new File("artifact1");
+		File file2 = new File("artifact2");
+		File file3 = new File("artifact3");
+
+		Artifact artifact1 = mock(Artifact.class);
+		when(artifact1.getFile())
+				.thenReturn(file1);
+		Artifact artifact2 = mock(Artifact.class);
+		when(artifact2.getFile())
+				.thenReturn(file2);
+		Artifact artifact3 = mock(Artifact.class);
+		when(artifact3.getFile())
+				.thenReturn(file3);
+
+		when(builderManager.build(argThat(matchesArtifact("some", "artifact1", null)), any(Source.class), any(File.class)))
+				.thenReturn(new HashSet<Artifact>(Arrays.asList(artifact1, artifact2)));
+		when(builderManager.build(argThat(matchesArtifact("some", "artifact2", null)), any(Source.class), any(File.class)))
+				.thenReturn(Collections.singleton(artifact3));
+
+		unconfiguredMojo.execute();
+
+		verify(installer).install(file1, artifact1, repository);
+		verify(installer).install(file2, artifact2, repository);
+		verify(installer).install(file3, artifact3, repository);
 	}
 }

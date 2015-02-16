@@ -30,6 +30,7 @@ import java.util.regex.Pattern;
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.InvalidRepositoryException;
 import org.apache.maven.artifact.installer.ArtifactInstallationException;
+import org.apache.maven.artifact.installer.ArtifactInstaller;
 import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.plugin.AbstractMojo;
@@ -109,6 +110,8 @@ public class BuildDependencies extends AbstractMojo {
 	private SourceBuilderManager sourceBuilderManager;
 	@Component
 	private DependencyCollection dependencyCollection;
+	@Component
+	private ArtifactInstaller artifactInstaller;
 
 	@Override
 	public void execute() throws MojoExecutionException, MojoFailureException {
@@ -142,6 +145,10 @@ public class BuildDependencies extends AbstractMojo {
 			for (Iterator<DependencyNode> iter = toBuild.iterator(); iter.hasNext();) {
 				DependencyNode node = iter.next();
 				Set<Artifact> builtArtifacts = buildDependencyGraph(node);
+				for (Artifact artifact : builtArtifacts) {
+					artifactInstaller.install(artifact.getFile(), artifact, repository);
+				}
+
 				checkSingleProjectFailure(node, iter, builtArtifacts);
 			}
 		} catch (InvalidRepositoryException e) {
