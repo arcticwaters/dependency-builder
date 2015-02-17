@@ -25,7 +25,12 @@ import java.util.List;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
+import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
+import org.apache.maven.execution.MavenSession;
+import org.apache.maven.repository.RepositorySystem;
 import org.codehaus.plexus.component.annotations.Component;
+import org.codehaus.plexus.component.annotations.Configuration;
 import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.logging.AbstractLogEnabled;
 import org.debian.dependency.sources.Source;
@@ -35,6 +40,10 @@ import org.debian.dependency.sources.Source;
 public class DefaultSourceBuilderManager extends AbstractLogEnabled implements SourceBuilderManager {
 	@Requirement(role = SourceBuilder.class)
 	private List<SourceBuilder> builders = new ArrayList<SourceBuilder>();
+	@Requirement
+	private RepositorySystem repositorySystem;
+	@Configuration(value = "false")
+	private boolean allowPrebuiltSources;
 
 	public void setBuilders(final List<SourceBuilder> builders) {
 		// new list so that we can modify it
@@ -66,7 +75,8 @@ public class DefaultSourceBuilderManager extends AbstractLogEnabled implements S
 	}
 
 	@Override
-	public Set<Artifact> build(final Artifact artifact, final Source source, final File localRepository) throws ArtifactBuildException {
+	public Set<Artifact> build(final Artifact artifact, final Source source, final File localRepository, final MavenSession session)
+			throws ArtifactBuildException {
 		try {
 			SourceBuilder builder = detect(source.getLocation());
 			if (builder == null) {
@@ -77,18 +87,34 @@ public class DefaultSourceBuilderManager extends AbstractLogEnabled implements S
 				getLogger().debug("Using " + builder + " to build " + artifact);
 			}
 
+			Artifact resolvdArtifact = resolveArtifact(artifact, session);
+			File file = resolvdArtifact.getFile().getAbsoluteFile();
 			source.clean();
-			Set<Artifact> result = new HashSet<Artifact>(builder.build(artifact, source, localRepository));
+			Set<Artifact> result = new HashSet<Artifact>(builder.build(resolvdArtifact, source, localRepository));
 			for (Iterator<Artifact> iter = result.iterator(); iter.hasNext();) {
 				Artifact resultArtifact = iter.next();
 				if (resultArtifact.getFile() == null) {
 					getLogger().warn("Artifact has no file " + resultArtifact);
 					iter.remove();
+				} else if (!allowPrebuiltSources && resultArtifact.equals(artifact)
+						&& resultArtifact.getFile().getAbsoluteFile().equals(file)) {
+					throw new ArtifactBuildException("Built file is the same as repository file, was it really built?");
 				}
 			}
 			return result;
 		} catch (IOException e) {
 			throw new ArtifactBuildException(e);
 		}
+	}
+
+	private Artifact resolveArtifact(final Artifact toResolve, final MavenSession session) {
+		ArtifactResolutionRequest request = new ArtifactResolutionRequest()
+				.setLocalRepository(session.getLocalRepository())
+				.setOffline(true)
+				.setResolveRoot(true)
+				.setArtifact(toResolve);
+
+		ArtifactResolutionResult result = repositorySystem.resolve(request);
+		return result.getArtifacts().iterator().next();
 	}
 }

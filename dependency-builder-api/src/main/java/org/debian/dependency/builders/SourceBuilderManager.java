@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.execution.MavenSession;
 import org.debian.dependency.sources.Source;
 
 /** Manages the different ways to build a project from source. */
@@ -55,8 +56,9 @@ public interface SourceBuilderManager {
 	 * @param artifact artifact to build
 	 * @param source source of the artifact
 	 * @param localRepository repository that should be used for resolution
+	 * @param session current session
 	 * @return artifacts that were built which can include attached and supplementary artifacts
 	 * @throws ArtifactBuildException in case of errors
 	 */
-	Set<Artifact> build(Artifact artifact, Source source, File localRepository) throws ArtifactBuildException;
+	Set<Artifact> build(Artifact artifact, Source source, File localRepository, MavenSession session) throws ArtifactBuildException;
 }

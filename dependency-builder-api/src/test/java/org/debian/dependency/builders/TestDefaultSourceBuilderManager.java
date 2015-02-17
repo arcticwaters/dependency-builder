@@ -22,9 +22,12 @@ import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThat;
 import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
@@ -35,7 +38,12 @@ import java.util.HashSet;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
+import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
+import org.apache.maven.execution.MavenSession;
+import org.apache.maven.repository.RepositorySystem;
 import org.codehaus.plexus.logging.Logger;
+import org.codehaus.plexus.util.ReflectionUtils;
 import org.debian.dependency.sources.Source;
 import org.junit.Before;
 import org.junit.Test;
@@ -43,7 +51,9 @@ import org.junit.runner.RunWith;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.invocation.InvocationOnMock;
 import org.mockito.runners.MockitoJUnitRunner;
+import org.mockito.stubbing.Answer;
 
 /** Test case for {@link DefaultSourceBuilderManager} . */
 @RunWith(MockitoJUnitRunner.class)
@@ -58,6 +68,8 @@ public class TestDefaultSourceBuilderManager {
 	@Mock
 	private Logger logger;
 	@Mock
+	private RepositorySystem repoSystem;
+	@Mock
 	private SourceBuilder invalidPriorityBuilder;
 	@Mock
 	private SourceBuilder lowPriorityBuilder;
@@ -71,6 +83,8 @@ public class TestDefaultSourceBuilderManager {
 	private Artifact artifact;
 	@Mock
 	private Source source;
+	@Mock
+	private MavenSession session;
 	private File repository = new File("repo");
 
 	@Before
@@ -86,6 +100,22 @@ public class TestDefaultSourceBuilderManager {
 
 		manager.addSourceBuilder(midPriorityBuilder);
 		selectedBuilder = midPriorityBuilder;
+
+
+		when(repoSystem.resolve(any(ArtifactResolutionRequest.class)))
+				.then(new Answer<ArtifactResolutionResult>() {
+					@Override
+					public ArtifactResolutionResult answer(final InvocationOnMock invocation) throws Throwable {
+						ArtifactResolutionRequest request = (ArtifactResolutionRequest) invocation.getArguments()[0];
+						ArtifactResolutionResult result = new ArtifactResolutionResult();
+
+						when(request.getArtifact().getFile())
+								.thenReturn(new File("artifact"));
+
+						result.addArtifact(request.getArtifact());
+						return result;
+					}
+				});
 	}
 
 	/** Correct builder is selected when they are added in priority order. */
@@ -138,7 +168,7 @@ public class TestDefaultSourceBuilderManager {
 	public void testCannotDetectSource() throws Exception {
 		manager.setBuilders(Collections.singletonList(invalidPriorityBuilder));
 
-		manager.build(artifact, source, repository);
+		manager.build(artifact, source, repository, session);
 	}
 
 	/** We should bubble up build exceptions. */
@@ -147,13 +177,13 @@ public class TestDefaultSourceBuilderManager {
 		when(selectedBuilder.build(artifact, source, repository))
 				.thenThrow(new ArtifactBuildException());
 
-		manager.build(artifact, source, repository);
+		manager.build(artifact, source, repository, session);
 	}
 
 	/** Sources should only be built from a pristine copy. */
 	@Test
 	public void testSourceCleanedBeforeBuilt() throws Exception {
-		manager.build(artifact, source, repository);
+		manager.build(artifact, source, repository, session);
 
 		InOrder order = inOrder(source, selectedBuilder);
 		order.verify(source).clean();
@@ -166,7 +196,7 @@ public class TestDefaultSourceBuilderManager {
 		doThrow(new IOException())
 				.when(source).clean();
 
-		manager.build(artifact, source, repository);
+		manager.build(artifact, source, repository, session);
 	}
 
 	/** All the artifacts that are built should be returned. */
@@ -183,9 +213,75 @@ public class TestDefaultSourceBuilderManager {
 		when(selectedBuilder.build(artifact, source, repository))
 				.thenReturn(new HashSet<Artifact>(Arrays.asList(fileArtifact1, noFileArtifact, fileArtifact2)));
 
-		Set<Artifact> results = manager.build(artifact, source, repository);
+		Set<Artifact> results = manager.build(artifact, source, repository, session);
 		assertThat(results, hasSize(2));
 		assertThat(results, containsInAnyOrder(fileArtifact1, fileArtifact2));
 		assertThat("Artifacts without files should be filtered out", results, not(hasItem(noFileArtifact)));
+	}
+
+	/** A builder which returns the artifact with the same file as the resolved one should bail if not configured. */
+	@Test(expected = ArtifactBuildException.class)
+	public void testReturnsPrebuiltSource() throws Exception {
+		when(selectedBuilder.build(any(Artifact.class), any(Source.class), any(File.class)))
+				.then(new Answer<Set<Artifact>>() {
+					@Override
+					public Set<Artifact> answer(final InvocationOnMock invocation) throws Throwable {
+						return Collections.singleton((Artifact) invocation.getArguments()[0]);
+					}
+				});
+
+		manager.build(artifact, source, repository, session);
+	}
+
+	/** We should not discriminate builders from returning the exact same artifact as long as it sets the file properly. */
+	@Test
+	public void testReturnsSameArtifactWithNewFile() throws Exception {
+		when(selectedBuilder.build(any(Artifact.class), any(Source.class), any(File.class)))
+				.then(new Answer<Set<Artifact>>() {
+					@Override
+					public Set<Artifact> answer(final InvocationOnMock invocation) throws Throwable {
+						Artifact artifact = (Artifact) invocation.getArguments()[0];
+						doReturn(new File("another file"))
+								.when(artifact).getFile();
+						return Collections.singleton(artifact);
+					}
+				});
+
+		Set<Artifact> results = manager.build(artifact, source, repository, session);
+		assertThat(results, hasItem(artifact));
+	}
+
+	/** If we allow prebuilt sources, we should allow builders returning artifacts with the same file. */
+	@Test
+	public void testAllowPrebuiltSource() throws Exception {
+		ReflectionUtils.setVariableValueInObject(manager, "allowPrebuiltSources", true);
+
+		when(selectedBuilder.build(any(Artifact.class), any(Source.class), any(File.class)))
+				.then(new Answer<Set<Artifact>>() {
+					@Override
+					public Set<Artifact> answer(final InvocationOnMock invocation) throws Throwable {
+						return Collections.singleton((Artifact) invocation.getArguments()[0]);
+					}
+				});
+
+		Set<Artifact> results = manager.build(artifact, source, repository, session);
+		assertThat(results, hasItem(artifact));
+	}
+
+	/** Some builders may find it helpful to use the original artifact file when building, i.e. comparing. */
+	@Test
+	public void testSendResolvedArtifact() throws Exception {
+		Artifact resolvedArtifact = mock(Artifact.class);
+		when(resolvedArtifact.getFile())
+				.thenReturn(new File("artifact"));
+		ArtifactResolutionResult result = mock(ArtifactResolutionResult.class);
+		when(result.getArtifacts())
+				.thenReturn(Collections.singleton(resolvedArtifact));
+
+		doReturn(result)
+				.when(repoSystem).resolve(any(ArtifactResolutionRequest.class));
+
+		manager.build(artifact, source, repository, session);
+		verify(selectedBuilder).build(eq(resolvedArtifact), any(Source.class), any(File.class));
 	}
 }

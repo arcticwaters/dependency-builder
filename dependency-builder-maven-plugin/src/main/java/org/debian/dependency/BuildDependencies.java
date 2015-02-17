@@ -203,18 +203,18 @@ public class BuildDependencies extends AbstractMojo {
 
 		Set<Artifact> result = new HashSet<Artifact>();
 		while (iter.hasNext()) {
-			DependencyNode node = iter.next();
+			Artifact artifact = iter.next().getArtifact();
 			try {
-				Source source = sourceRetrievalManager.checkoutSource(node.getArtifact(), workDirectory, session);
-				Set<Artifact> built = sourceBuilderManager.build(node.getArtifact(), source, outputDirectory);
-				if (!built.contains(node.getArtifact())) {
-					getLog().warn("Artifact not found in built artifacts: " + node.getArtifact());
+				Source source = sourceRetrievalManager.checkoutSource(artifact, workDirectory, session);
+				Set<Artifact> built = sourceBuilderManager.build(artifact, source, outputDirectory, session);
+				if (!built.contains(artifact)) {
+					getLog().warn("Artifact not found in built artifacts: " + artifact);
 				}
 				result.addAll(built);
 			} catch (SourceRetrievalException e) {
-				throw new MojoExecutionException("Unable to retrieve source: " + node.getArtifact(), e);
+				throw new MojoExecutionException("Unable to retrieve source: " + artifact, e);
 			} catch (ArtifactBuildException e) {
-				throw new MojoExecutionException("Unable to build artifact: " + node.getArtifact(), e);
+				throw new MojoExecutionException("Unable to build artifact: " + artifact, e);
 			}
 		}
 		return result;

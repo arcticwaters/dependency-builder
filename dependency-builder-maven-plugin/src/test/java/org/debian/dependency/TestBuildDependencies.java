@@ -140,7 +140,7 @@ public class TestBuildDependencies {
 						any(ArtifactRepository.class),
 						any(MavenSession.class))).then(returnsFirstArg());
 
-		when(builderManager.build(any(Artifact.class), any(Source.class), any(File.class)))
+		when(builderManager.build(any(Artifact.class), any(Source.class), any(File.class), any(MavenSession.class)))
 				.then(new Answer<Set<Artifact>>() {
 			@Override
 					public Set<Artifact> answer(final InvocationOnMock invocation) throws Throwable {
@@ -250,8 +250,10 @@ public class TestBuildDependencies {
 
 		unconfiguredMojo.execute();
 
-		verify(retrievalManager).checkoutSource(argThat(matchesArtifact("some", "artifact", null)), any(File.class), any(MavenSession.class));
-		verify(builderManager).build(argThat(matchesArtifact("some", "artifact", null)), any(Source.class), any(File.class));
+		verify(retrievalManager).checkoutSource(argThat(matchesArtifact("some", "artifact", null)), any(File.class),
+				any(MavenSession.class));
+		verify(builderManager).build(argThat(matchesArtifact("some", "artifact", null)), any(Source.class), any(File.class),
+				any(MavenSession.class));
 	}
 
 	/** We should be able to configure multiple artifacts if necessary. */
@@ -269,7 +271,7 @@ public class TestBuildDependencies {
 		ArgumentCaptor<Artifact> retrievalArtifacts = ArgumentCaptor.forClass(Artifact.class);
 		ArgumentCaptor<Artifact> buildArtifacts = ArgumentCaptor.forClass(Artifact.class);
 		verify(retrievalManager, times(2)).checkoutSource(retrievalArtifacts.capture(), any(File.class), any(MavenSession.class));
-		verify(builderManager, times(2)).build(buildArtifacts.capture(), any(Source.class), any(File.class));
+		verify(builderManager, times(2)).build(buildArtifacts.capture(), any(Source.class), any(File.class), any(MavenSession.class));
 
 		assertThat(buildArtifacts.getAllValues(), hasSize(2));
 		assertThat(buildArtifacts.getAllValues(),
@@ -294,7 +296,7 @@ public class TestBuildDependencies {
 		ArgumentCaptor<Artifact> retrievalArtifacts = ArgumentCaptor.forClass(Artifact.class);
 		ArgumentCaptor<Artifact> buildArtifacts = ArgumentCaptor.forClass(Artifact.class);
 		verify(retrievalManager, times(2)).checkoutSource(retrievalArtifacts.capture(), any(File.class), any(MavenSession.class));
-		verify(builderManager, times(2)).build(buildArtifacts.capture(), any(Source.class), any(File.class));
+		verify(builderManager, times(2)).build(buildArtifacts.capture(), any(Source.class), any(File.class), any(MavenSession.class));
 
 		assertThat(retrievalArtifacts.getAllValues(),
 				containsInAnyOrder(matchesArtifact("some", "artifact1", null), matchesArtifact("some", "artifact2", null)));
@@ -326,7 +328,7 @@ public class TestBuildDependencies {
 		ArgumentCaptor<Artifact> retrievalArtifacts = ArgumentCaptor.forClass(Artifact.class);
 		ArgumentCaptor<Artifact> buildArtifacts = ArgumentCaptor.forClass(Artifact.class);
 		verify(retrievalManager, times(2)).checkoutSource(retrievalArtifacts.capture(), any(File.class), any(MavenSession.class));
-		verify(builderManager, times(2)).build(buildArtifacts.capture(), any(Source.class), any(File.class));
+		verify(builderManager, times(2)).build(buildArtifacts.capture(), any(Source.class), any(File.class), any(MavenSession.class));
 
 		assertThat(retrievalArtifacts.getAllValues(),
 				containsInAnyOrder(matchesArtifact("some", "artifact", "version"), matchesArtifact("another", "artifact", "version")));
@@ -394,7 +396,7 @@ public class TestBuildDependencies {
 		configuredMojo.execute();
 
 		ArgumentCaptor<Artifact> captor = ArgumentCaptor.forClass(Artifact.class);
-		verify(builderManager, atLeast(2)).build(captor.capture(), any(Source.class), any(File.class));
+		verify(builderManager, atLeast(2)).build(captor.capture(), any(Source.class), any(File.class), any(MavenSession.class));
 
 		assertThat(captor.getAllValues(), hasItem(matchesArtifact("org.apache.maven.surefire", "surefire-junit3", "some-version")));
 		assertThat(captor.getAllValues(), hasItem(matchesArtifact("org.apache.maven.surefire", "surefire-junit4", "some-version")));
@@ -413,10 +415,10 @@ public class TestBuildDependencies {
 
 		unconfiguredMojo.execute();
 
-		verify(retrievalManager).checkoutSource(argThat(matchesArtifact("org.apache.maven.plugins", "maven-compiler-plugin", null)), any(File.class),
-				any(MavenSession.class));
-		verify(builderManager).build(argThat(matchesArtifact("org.apache.maven.plugins", "maven-compiler-plugin", null)), any(Source.class),
-				any(File.class));
+		verify(retrievalManager).checkoutSource(argThat(matchesArtifact("org.apache.maven.plugins", "maven-compiler-plugin", null)),
+				any(File.class), any(MavenSession.class));
+		verify(builderManager).build(argThat(matchesArtifact("org.apache.maven.plugins", "maven-compiler-plugin", null)),
+				any(Source.class), any(File.class), any(MavenSession.class));
 	}
 
 	/**
@@ -467,13 +469,15 @@ public class TestBuildDependencies {
 		configuredMojo.execute();
 
 		ArgumentCaptor<Artifact> buildArtifacts = ArgumentCaptor.forClass(Artifact.class);
-		verify(builderManager, times(2)).build(buildArtifacts.capture(), any(Source.class), any(File.class));
+		verify(builderManager, times(2)).build(buildArtifacts.capture(), any(Source.class), any(File.class), any(MavenSession.class));
 
 		assertThat(buildArtifacts.getAllValues(),
 				containsInAnyOrder(matchesArtifact("some", "artifact", null), matchesArtifact("another", "child", null)));
 
-		verify(builderManager, never()).build(argThat(matchesArtifact("group", "child", "version")), any(Source.class), any(File.class));
-		verify(builderManager, never()).build(argThat(matchesArtifact("group", "grandchild", "version")), any(Source.class), any(File.class));
+		verify(builderManager, never()).build(argThat(matchesArtifact("group", "child", "version")), any(Source.class), any(File.class),
+				any(MavenSession.class));
+		verify(builderManager, never()).build(argThat(matchesArtifact("group", "grandchild", "version")), any(Source.class),
+				any(File.class), any(MavenSession.class));
 	}
 
 	/** We should hiccup if a user inadvertently ignores all artifacts. */
@@ -517,7 +521,7 @@ public class TestBuildDependencies {
 				retrievalManager.checkoutSource(argThat(matchesArtifact("some", "artifact", null)), eq(workDir.getAbsoluteFile()),
 						any(MavenSession.class)))
 				.thenReturn(source);
-		when(builderManager.build(any(Artifact.class), any(Source.class), any(File.class)))
+		when(builderManager.build(any(Artifact.class), any(Source.class), any(File.class), any(MavenSession.class)))
 				.then(new Answer<Set<Artifact>>() {
 					@Override
 					public Set<Artifact> answer(final InvocationOnMock invocation) throws Throwable {
@@ -527,8 +531,10 @@ public class TestBuildDependencies {
 
 		unconfiguredMojo.execute();
 
-		verify(retrievalManager).checkoutSource(argThat(matchesArtifact("some", "artifact", null)), any(File.class), any(MavenSession.class));
-		verify(builderManager).build(argThat(matchesArtifact("some", "artifact", null)), eq(source), eq(outputDir.getCanonicalFile()));
+		verify(retrievalManager).checkoutSource(argThat(matchesArtifact("some", "artifact", null)), any(File.class),
+				any(MavenSession.class));
+		verify(builderManager).build(argThat(matchesArtifact("some", "artifact", null)), eq(source), eq(outputDir.getCanonicalFile()),
+				any(MavenSession.class));
 	}
 
 	/** When multiproject is set, we should still be able to build a single artifact. */
@@ -541,8 +547,10 @@ public class TestBuildDependencies {
 
 		unconfiguredMojo.execute();
 
-		verify(retrievalManager).checkoutSource(argThat(matchesArtifact("some", "artifact", null)), any(File.class), any(MavenSession.class));
-		verify(builderManager).build(argThat(matchesArtifact("some", "artifact", null)), any(Source.class), any(File.class));
+		verify(retrievalManager).checkoutSource(argThat(matchesArtifact("some", "artifact", null)), any(File.class),
+				any(MavenSession.class));
+		verify(builderManager).build(argThat(matchesArtifact("some", "artifact", null)), any(Source.class), any(File.class),
+				any(MavenSession.class));
 	}
 
 	/** If there are multiple artifacts to be built, but without multiproject set, we should bail. */
@@ -624,7 +632,7 @@ public class TestBuildDependencies {
 	/** Errors from building source should bubble up. */
 	@Test(expected = MojoExecutionException.class)
 	public void testBuildErrors() throws Exception {
-		when(builderManager.build(any(Artifact.class), any(Source.class), any(File.class)))
+		when(builderManager.build(any(Artifact.class), any(Source.class), any(File.class), any(MavenSession.class)))
 				.thenThrow(new ArtifactBuildException());
 
 		configuredMojo.execute();
@@ -658,9 +666,13 @@ public class TestBuildDependencies {
 		when(artifact3.getFile())
 				.thenReturn(file3);
 
-		when(builderManager.build(argThat(matchesArtifact("some", "artifact1", null)), any(Source.class), any(File.class)))
+		when(
+				builderManager.build(argThat(matchesArtifact("some", "artifact1", null)), any(Source.class), any(File.class),
+						any(MavenSession.class)))
 				.thenReturn(new HashSet<Artifact>(Arrays.asList(artifact1, artifact2)));
-		when(builderManager.build(argThat(matchesArtifact("some", "artifact2", null)), any(Source.class), any(File.class)))
+		when(
+				builderManager.build(argThat(matchesArtifact("some", "artifact2", null)), any(Source.class), any(File.class),
+						any(MavenSession.class)))
 				.thenReturn(Collections.singleton(artifact3));
 
 		unconfiguredMojo.execute();
