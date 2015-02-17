@@ -17,10 +17,7 @@ package org.debian.dependency.builders;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.PrintWriter;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
@@ -43,13 +40,9 @@ import org.apache.tools.ant.ProjectHelper;
 import org.codehaus.plexus.component.annotations.Component;
 import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.util.FileUtils;
-import org.codehaus.plexus.util.IOUtil;
 import org.debian.dependency.sources.Source;
-import org.eclipse.jgit.diff.Edit;
-import org.eclipse.jgit.diff.EditList;
-import org.eclipse.jgit.diff.HistogramDiff;
-import org.eclipse.jgit.diff.RawText;
-import org.eclipse.jgit.diff.RawTextComparator;
+
+import com.google.common.collect.Sets;
 
 /**
  * Builds an Ant project using an embedded version of Ant.
@@ -99,27 +92,11 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 
 	private File findFile(final Artifact artifact, final Source source, final String pattern) throws IOException {
 		for (File file : FileUtils.getFiles(source.getLocation(), pattern, null)) {
-			if (jarSimilarity(source, artifact.getFile(), file) > MIN_SIMILARITY) {
+			if (jarSimilarity(artifact.getFile(), file) > MIN_SIMILARITY) {
 				return file;
 			}
 		}
 		throw new IllegalStateException("Cannot find built jar file for " + artifact);
-	}
-
-	private float calculateSimilarity(final File text1, final File text2) throws IOException {
-		RawText rawText1 = new RawText(text1);
-		RawText rawText2 = new RawText(text2);
-		long fullSize = Math.max(rawText1.size(), rawText2.size());
-
-		EditList diffList = new EditList();
-		diffList.addAll(new HistogramDiff().diff(RawTextComparator.WS_IGNORE_ALL, rawText1, rawText2));
-
-		long diffSize = 0;
-		for (Edit edit : diffList) {
-			diffSize += Math.max(edit.getLengthB(), edit.getLengthA());
-		}
-
-		return Math.max(fullSize - diffSize, 0f) / fullSize;
 	}
 
 	/*
@@ -127,46 +104,29 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 	 * a high number of files and has the advantage of not hiccupping on differences in compilers. Since
 	 * it doesn't actually diff contents, it can be easily fooled.
 	 */
-	private float jarSimilarity(final Source source, final File jarFile1, final File jarFile2) throws IOException {
-		File fileList1 = null;
-		File fileList2 = null;
-		try {
-			fileList1 = createFileList(source, jarFile1);
-			fileList2 = createFileList(source, jarFile2);
-			return calculateSimilarity(fileList1, fileList2);
-		} finally {
-			if (fileList1 != null) {
-				FileUtils.forceDelete(fileList1);
-			}
-			if (fileList2 != null) {
-				FileUtils.forceDelete(fileList2);
-			}
-		}
+	private float jarSimilarity(final File jarFile1, final File jarFile2) throws IOException {
+		Set<String> files1 = createFileList(jarFile1);
+		Set<String> files2 = createFileList(jarFile2);
+
+		Set<String> union = Sets.union(files1, files2);
+		Set<String> difference = Sets.symmetricDifference(files1, files2);
+		return (union.size() - difference.size()) / union.size();
 	}
 
-	private File createFileList(final Source source, final File file) throws IOException {
-		File fileList = FileUtils.createTempFile("filelist", ".txt", source.getLocation());
-		PrintWriter writer = null;
+	private Set<String> createFileList(final File file) throws IOException {
+		Set<String> result = new HashSet<String>();
 		JarFile jarFile = null;
 		try {
 			jarFile = new JarFile(file);
-			writer = new PrintWriter(fileList);
 
-			List<String> entries = new ArrayList<String>();
 			for (Enumeration<JarEntry> iter = jarFile.entries(); iter.hasMoreElements();) {
 				JarEntry entry = iter.nextElement();
-				entries.add(entry.getName());
+				result.add(entry.getName());
 			}
 
-			Collections.sort(entries);
-			for (String entry : entries) {
-				writer.println(entry);
-			}
-
-			return fileList;
+			return result;
 		} finally {
 			try {
-				IOUtil.close(writer);
 				if (jarFile != null) {
 					jarFile.close();
 				}
