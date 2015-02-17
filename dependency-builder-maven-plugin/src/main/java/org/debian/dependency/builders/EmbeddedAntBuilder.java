@@ -38,6 +38,7 @@ import org.apache.tools.ant.BuildException;
 import org.apache.tools.ant.Project;
 import org.apache.tools.ant.ProjectHelper;
 import org.codehaus.plexus.component.annotations.Component;
+import org.codehaus.plexus.component.annotations.Configuration;
 import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.util.FileUtils;
 import org.debian.dependency.sources.Source;
@@ -50,12 +51,14 @@ import com.google.common.collect.Sets;
 @Component(role = SourceBuilder.class, hint = "ant")
 public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implements SourceBuilder {
 	private static final String BUILD_INCLUDES = "**/build.xml";
-	private static final float MIN_SIMILARITY = .9f;
 
 	@Requirement
 	private ModelBuilder modelBuilder;
 	@Requirement
 	private RepositorySystem repositorySystem;
+
+	@Configuration(value = "0.9")
+	private float minimumSimilarity;
 
 	@Override
 	public Set<Artifact> build(final Artifact artifact, final Source source, final File localRepository) throws ArtifactBuildException {
@@ -92,7 +95,7 @@ public class EmbeddedAntBuilder extends AbstractBuildFileSourceBuilder implement
 
 	private File findFile(final Artifact artifact, final Source source, final String pattern) throws IOException {
 		for (File file : FileUtils.getFiles(source.getLocation(), pattern, null)) {
-			if (jarSimilarity(artifact.getFile(), file) > MIN_SIMILARITY) {
+			if (jarSimilarity(artifact.getFile(), file) > minimumSimilarity) {
 				return file;
 			}
 		}

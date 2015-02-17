@@ -48,6 +48,7 @@ import org.apache.maven.model.building.ModelBuildingException;
 import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.repository.RepositorySystem;
 import org.codehaus.plexus.logging.Logger;
+import org.codehaus.plexus.util.ReflectionUtils;
 import org.debian.dependency.sources.Source;
 import org.hamcrest.CustomTypeSafeMatcher;
 import org.junit.Before;
@@ -121,6 +122,8 @@ public class TestEmbeddedAntBuilder {
 		File jarFile = new File(tempFolder.getRoot(), "artifact.jar");
 		writeSimpleJar(jarFile);
 		artifact.setFile(jarFile);
+
+		ReflectionUtils.setVariableValueInObject(builder, "minimumSimilarity", .9f);
 	}
 
 	private void writeEmptyBuildFile(final File buildFile) throws Exception {
