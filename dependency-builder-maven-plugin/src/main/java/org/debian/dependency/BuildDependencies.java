@@ -92,10 +92,13 @@ public class BuildDependencies extends AbstractMojo {
 	 */
 	@Parameter
 	private final StrictPatternArtifactFilter ignores = new StrictPatternArtifactFilter(false);
-	/** Directory where local git repositories should be made for potential modifications. */
+	/** Directory where local source repositories should be made for potential modifications. */
 	@Parameter(defaultValue = "${project.build.directory}/dependency-builder/work")
 	private File workDirectory;
-	/** Whether to allow more than a single project to be built. */
+	/**
+	 * Whether to allow more than a single source repository for building artifacts. If not set, only the source repository for
+	 * the first artifact will be used.
+	 */
 	@Parameter
 	private boolean multiProject;
 
